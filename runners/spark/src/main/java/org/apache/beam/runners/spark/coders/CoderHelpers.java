@@ -28,6 +28,7 @@ import com.google.common.collect.Iterables;
 import org.apache.beam.runners.spark.util.ByteArray;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.MapFunction;
 import org.apache.spark.api.java.function.PairFunction;
 import scala.Tuple2;
 
@@ -106,6 +107,18 @@ public final class CoderHelpers {
   }
 
   /**
+   * For Datasets
+   */
+  public static <T> MapFunction<T, byte[]> toByteFunctionDatasets(final Coder<T> coder) {
+    return new MapFunction<T, byte[]>() {
+      @Override
+      public byte[] call(T t) throws Exception {
+        return toByteArray(t, coder);
+      }
+    };
+  }
+
+  /**
    * A function wrapper for converting a byte array to an object.
    *
    * @param coder Coder to deserialize with.
@@ -114,6 +127,18 @@ public final class CoderHelpers {
    */
   public static <T> Function<byte[], T> fromByteFunction(final Coder<T> coder) {
     return new Function<byte[], T>() {
+      @Override
+      public T call(byte[] bytes) throws Exception {
+        return fromByteArray(bytes, coder);
+      }
+    };
+  }
+
+  /**
+   * For Datasets
+   */
+  public static <T> MapFunction<byte[], T> fromByteFunctionDatasets(final Coder<T> coder) {
+    return new MapFunction<byte[], T>() {
       @Override
       public T call(byte[] bytes) throws Exception {
         return fromByteArray(bytes, coder);
