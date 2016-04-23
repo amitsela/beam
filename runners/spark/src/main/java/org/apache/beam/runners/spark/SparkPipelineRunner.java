@@ -18,13 +18,13 @@
 
 package org.apache.beam.runners.spark;
 
-import org.apache.beam.runners.spark.translation.EvaluationContext;
+import org.apache.beam.runners.spark.translation.RDDEvaluationContext;
+import org.apache.beam.runners.spark.translation.RDDTransformTranslator;
 import org.apache.beam.runners.spark.translation.SparkContextFactory;
 import org.apache.beam.runners.spark.translation.SparkPipelineEvaluator;
-import org.apache.beam.runners.spark.translation.SparkPipelineTranslator;
+import org.apache.beam.runners.spark.translation.SparkRDDPipelineTranslator;
 import org.apache.beam.runners.spark.translation.SparkProcessContext;
-import org.apache.beam.runners.spark.translation.TransformTranslator;
-import org.apache.beam.runners.spark.translation.streaming.StreamingEvaluationContext;
+import org.apache.beam.runners.spark.translation.streaming.StreamingRDDEvaluationContext;
 import org.apache.beam.runners.spark.translation.streaming.StreamingTransformTranslator;
 import org.apache.beam.runners.spark.translation.streaming.StreamingWindowPipelineDetector;
 import org.apache.beam.runners.spark.util.SinglePrimitiveOutputPTransform;
@@ -158,8 +158,8 @@ public final class SparkPipelineRunner extends PipelineRunner<EvaluationResult> 
               .getSparkMaster(), mOptions.getAppName());
 
       if (mOptions.isStreaming()) {
-        SparkPipelineTranslator translator =
-                new StreamingTransformTranslator.Translator(new TransformTranslator.Translator());
+        SparkRDDPipelineTranslator translator =
+            new StreamingTransformTranslator.TranslatorRDD(new RDDTransformTranslator.TranslatorRDD());
         // if streaming - fixed window should be defined on all UNBOUNDED inputs
         StreamingWindowPipelineDetector streamingWindowPipelineDetector =
             new StreamingWindowPipelineDetector(translator);
@@ -170,18 +170,18 @@ public final class SparkPipelineRunner extends PipelineRunner<EvaluationResult> 
 
         Duration batchInterval = streamingWindowPipelineDetector.getBatchDuration();
         LOG.info("Setting Spark streaming batchInterval to {} msec", batchInterval.milliseconds());
-        EvaluationContext ctxt = createStreamingEvaluationContext(jsc, pipeline, batchInterval);
+        RDDEvaluationContext ctxt = createStreamingEvaluationContext(jsc, pipeline, batchInterval);
 
         pipeline.traverseTopologically(new SparkPipelineEvaluator(ctxt, translator));
         ctxt.computeOutputs();
 
         LOG.info("Streaming pipeline construction complete. Starting execution..");
-        ((StreamingEvaluationContext) ctxt).getStreamingContext().start();
+        ((StreamingRDDEvaluationContext) ctxt).getStreamingContext().start();
 
         return ctxt;
       } else {
-        EvaluationContext ctxt = new EvaluationContext(jsc, pipeline);
-        SparkPipelineTranslator translator = new TransformTranslator.Translator();
+        RDDEvaluationContext ctxt = new RDDEvaluationContext(jsc, pipeline);
+        SparkRDDPipelineTranslator translator = new RDDTransformTranslator.TranslatorRDD();
         pipeline.traverseTopologically(new SparkPipelineEvaluator(ctxt, translator));
         ctxt.computeOutputs();
 
@@ -208,32 +208,32 @@ public final class SparkPipelineRunner extends PipelineRunner<EvaluationResult> 
     }
   }
 
-  private EvaluationContext
+  private RDDEvaluationContext
       createStreamingEvaluationContext(JavaSparkContext jsc, Pipeline pipeline,
       Duration batchDuration) {
     SparkStreamingPipelineOptions streamingOptions = (SparkStreamingPipelineOptions) mOptions;
     JavaStreamingContext jssc = new JavaStreamingContext(jsc, batchDuration);
-    return new StreamingEvaluationContext(jsc, pipeline, jssc, streamingOptions.getTimeout());
+    return new StreamingRDDEvaluationContext(jsc, pipeline, jssc, streamingOptions.getTimeout());
   }
 
   public abstract static class Evaluator implements Pipeline.PipelineVisitor {
     protected static final Logger LOG = LoggerFactory.getLogger(Evaluator.class);
 
-    protected final SparkPipelineTranslator translator;
+    protected final SparkRDDPipelineTranslator translator;
 
-    protected Evaluator(SparkPipelineTranslator translator) {
+    protected Evaluator(SparkRDDPipelineTranslator translator) {
       this.translator = translator;
     }
 
     // Set upon entering a composite node which can be directly mapped to a single
-    // TransformEvaluator.
+    // RDDTransformEvaluator.
     private TransformTreeNode currentTranslatedCompositeNode;
 
     /**
      * If true, we're currently inside a subtree of a composite node which directly maps to a
      * single
-     * TransformEvaluator; children nodes are ignored, and upon post-visiting the translated
-     * composite node, the associated TransformEvaluator will be visited.
+     * RDDTransformEvaluator; children nodes are ignored, and upon post-visiting the translated
+     * composite node, the associated RDDTransformEvaluator will be visited.
      */
     private boolean inTranslatedCompositeNode() {
       return currentTranslatedCompositeNode != null;

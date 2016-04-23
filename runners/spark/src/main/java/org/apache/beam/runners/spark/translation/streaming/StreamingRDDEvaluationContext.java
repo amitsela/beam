@@ -25,7 +25,7 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 
-import org.apache.beam.runners.spark.translation.EvaluationContext;
+import org.apache.beam.runners.spark.translation.RDDEvaluationContext;
 import org.apache.beam.runners.spark.translation.SparkRuntimeContext;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.Coder;
@@ -47,15 +47,15 @@ import org.apache.spark.streaming.api.java.JavaStreamingContext;
 /**
  * Streaming evaluation context helps to handle streaming.
  */
-public class StreamingEvaluationContext extends EvaluationContext {
+public class StreamingRDDEvaluationContext extends RDDEvaluationContext {
 
   private final JavaStreamingContext jssc;
   private final long timeout;
   private final Map<PValue, DStreamHolder<?>> pstreams = new LinkedHashMap<>();
   private final Set<DStreamHolder<?>> leafStreams = new LinkedHashSet<>();
 
-  public StreamingEvaluationContext(JavaSparkContext jsc, Pipeline pipeline,
-      JavaStreamingContext jssc, long timeout) {
+  public StreamingRDDEvaluationContext(JavaSparkContext jsc, Pipeline pipeline,
+                                       JavaStreamingContext jssc, long timeout) {
     super(jsc, pipeline);
     this.jssc = jssc;
     this.timeout = timeout;

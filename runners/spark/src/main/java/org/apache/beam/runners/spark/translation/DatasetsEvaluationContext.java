@@ -18,6 +18,10 @@
 
 package org.apache.beam.runners.spark.translation;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
+import java.util.*;
+
 import com.google.common.base.Function;
 import com.google.common.collect.Iterables;
 import org.apache.beam.runners.spark.EvaluationResult;
@@ -36,13 +40,8 @@ import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.*;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.sql.Dataset;
-import org.apache.spark.sql.Encoder;
 import org.apache.spark.sql.Encoders;
 import org.apache.spark.sql.SQLContext;
-
-import java.util.*;
-
-import static com.google.common.base.Preconditions.checkArgument;
 
 /**
  * Evaluation context allows us to define how pipeline instructions.
@@ -69,7 +68,7 @@ public class DatasetsEvaluationContext implements EvaluationResult {
   /**
    * Holds a Dataset or values for deferred conversion to a Dataset if needed. PCollections are
    * sometimes created from a collection of objects using
-   * {@link SQLContext#createDataset(List, Encoder)}) and then
+   * {@link SQLContext#createDataset(List, org.apache.spark.sql.Encoder)}) and then
    * only used to create View objects; in which case they do not need to be
    * converted to bytes since they are not transferred across the network until they are
    * broadcast.

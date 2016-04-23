@@ -53,7 +53,7 @@ import org.apache.spark.api.java.JavaSparkContext;
 /**
  * Evaluation context allows us to define how pipeline instructions.
  */
-public class EvaluationContext implements EvaluationResult {
+public class RDDEvaluationContext implements EvaluationResult {
   private final JavaSparkContext jsc;
   private final Pipeline pipeline;
   private final SparkRuntimeContext runtime;
@@ -64,7 +64,7 @@ public class EvaluationContext implements EvaluationResult {
   private final Map<PValue, Iterable<? extends WindowedValue<?>>> pview = new LinkedHashMap<>();
   protected AppliedPTransform<?, ?, ?> currentTransform;
 
-  public EvaluationContext(JavaSparkContext jsc, Pipeline pipeline) {
+  public RDDEvaluationContext(JavaSparkContext jsc, Pipeline pipeline) {
     this.jsc = jsc;
     this.pipeline = pipeline;
     this.runtime = new SparkRuntimeContext(jsc, pipeline);

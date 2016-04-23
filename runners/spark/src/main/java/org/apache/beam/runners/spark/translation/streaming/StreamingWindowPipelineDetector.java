@@ -19,8 +19,8 @@
 package org.apache.beam.runners.spark.translation.streaming;
 
 import org.apache.beam.runners.spark.SparkPipelineRunner;
-import org.apache.beam.runners.spark.translation.SparkPipelineTranslator;
-import org.apache.beam.runners.spark.translation.TransformTranslator;
+import org.apache.beam.runners.spark.translation.RDDTransformTranslator;
+import org.apache.beam.runners.spark.translation.SparkRDDPipelineTranslator;
 import org.apache.beam.sdk.runners.TransformTreeNode;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
@@ -45,12 +45,12 @@ public final class StreamingWindowPipelineDetector extends SparkPipelineRunner.E
   private boolean windowing;
   private Duration batchDuration;
 
-  public StreamingWindowPipelineDetector(SparkPipelineTranslator translator) {
+  public StreamingWindowPipelineDetector(SparkRDDPipelineTranslator translator) {
     super(translator);
   }
 
-  private static final TransformTranslator.FieldGetter WINDOW_FG =
-      new TransformTranslator.FieldGetter(Window.Bound.class);
+  private static final RDDTransformTranslator.FieldGetter WINDOW_FG =
+      new RDDTransformTranslator.FieldGetter(Window.Bound.class);
 
   // Use the smallest window (fixed or sliding) as Spark streaming's batch duration
   @Override

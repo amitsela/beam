@@ -106,9 +106,7 @@ public final class CoderHelpers {
     };
   }
 
-  /**
-   * For Datasets
-   */
+  // For Datasets
   public static <T> MapFunction<T, byte[]> toByteFunctionDatasets(final Coder<T> coder) {
     return new MapFunction<T, byte[]>() {
       @Override
@@ -134,9 +132,7 @@ public final class CoderHelpers {
     };
   }
 
-  /**
-   * For Datasets
-   */
+  // For Datasets
   public static <T> MapFunction<byte[], T> fromByteFunctionDatasets(final Coder<T> coder) {
     return new MapFunction<byte[], T>() {
       @Override

@@ -20,11 +20,12 @@ package org.apache.beam.runners.spark.translation;
 import org.apache.beam.sdk.transforms.PTransform;
 
 /**
- * Translator to support translation between Dataflow transformations and Spark transformations.
+ * TranslatorDatasets to support translation between Beam transformations
+ * and Spark transformations.
  */
-public interface SparkPipelineTranslator {
+public interface SparkDatasetsPipelineTranslator {
 
   boolean hasTranslation(Class<? extends PTransform<?, ?>> clazz);
 
-  <PT extends PTransform<?, ?>> TransformEvaluator<PT> translate(Class<PT> clazz);
+  <PT extends PTransform<?, ?>> DatasetsTransformEvaluator<PT> translate(Class<PT> clazz);
 }

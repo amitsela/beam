@@ -34,10 +34,10 @@ import org.apache.beam.runners.spark.io.CreateStream;
 import org.apache.beam.runners.spark.io.KafkaIO;
 import org.apache.beam.runners.spark.io.hadoop.HadoopIO;
 import org.apache.beam.runners.spark.translation.DoFnFunction;
-import org.apache.beam.runners.spark.translation.EvaluationContext;
-import org.apache.beam.runners.spark.translation.SparkPipelineTranslator;
-import org.apache.beam.runners.spark.translation.TransformEvaluator;
-import org.apache.beam.runners.spark.translation.TransformTranslator;
+import org.apache.beam.runners.spark.translation.RDDEvaluationContext;
+import org.apache.beam.runners.spark.translation.RDDTransformEvaluator;
+import org.apache.beam.runners.spark.translation.RDDTransformTranslator;
+import org.apache.beam.runners.spark.translation.SparkRDDPipelineTranslator;
 import org.apache.beam.runners.spark.translation.WindowingHelpers;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.VoidCoder;
@@ -79,24 +79,24 @@ public final class StreamingTransformTranslator {
   private StreamingTransformTranslator() {
   }
 
-  private static <T> TransformEvaluator<ConsoleIO.Write.Unbound<T>> print() {
-    return new TransformEvaluator<ConsoleIO.Write.Unbound<T>>() {
+  private static <T> RDDTransformEvaluator<ConsoleIO.Write.Unbound<T>> print() {
+    return new RDDTransformEvaluator<ConsoleIO.Write.Unbound<T>>() {
       @Override
-      public void evaluate(ConsoleIO.Write.Unbound<T> transform, EvaluationContext context) {
+      public void evaluate(ConsoleIO.Write.Unbound<T> transform, RDDEvaluationContext context) {
         @SuppressWarnings("unchecked")
         JavaDStreamLike<WindowedValue<T>, ?, JavaRDD<WindowedValue<T>>> dstream =
             (JavaDStreamLike<WindowedValue<T>, ?, JavaRDD<WindowedValue<T>>>)
-            ((StreamingEvaluationContext) context).getStream(transform);
+            ((StreamingRDDEvaluationContext) context).getStream(transform);
         dstream.map(WindowingHelpers.<T>unwindowFunction()).print(transform.getNum());
       }
     };
   }
 
-  private static <K, V> TransformEvaluator<KafkaIO.Read.Unbound<K, V>> kafka() {
-    return new TransformEvaluator<KafkaIO.Read.Unbound<K, V>>() {
+  private static <K, V> RDDTransformEvaluator<KafkaIO.Read.Unbound<K, V>> kafka() {
+    return new RDDTransformEvaluator<KafkaIO.Read.Unbound<K, V>>() {
       @Override
-      public void evaluate(KafkaIO.Read.Unbound<K, V> transform, EvaluationContext context) {
-        StreamingEvaluationContext sec = (StreamingEvaluationContext) context;
+      public void evaluate(KafkaIO.Read.Unbound<K, V> transform, RDDEvaluationContext context) {
+        StreamingRDDEvaluationContext sec = (StreamingRDDEvaluationContext) context;
         JavaStreamingContext jssc = sec.getStreamingContext();
         Class<K> keyClazz = transform.getKeyClass();
         Class<V> valueClazz = transform.getValueClass();
@@ -118,12 +118,12 @@ public final class StreamingTransformTranslator {
     };
   }
 
-  private static <T> TransformEvaluator<Create.Values<T>> create() {
-    return new TransformEvaluator<Create.Values<T>>() {
+  private static <T> RDDTransformEvaluator<Create.Values<T>> create() {
+    return new RDDTransformEvaluator<Create.Values<T>>() {
       @SuppressWarnings("unchecked")
       @Override
-      public void evaluate(Create.Values<T> transform, EvaluationContext context) {
-        StreamingEvaluationContext sec = (StreamingEvaluationContext) context;
+      public void evaluate(Create.Values<T> transform, RDDEvaluationContext context) {
+        StreamingRDDEvaluationContext sec = (StreamingRDDEvaluationContext) context;
         Iterable<T> elems = transform.getElements();
         Coder<T> coder = sec.getOutput(transform).getCoder();
         if (coder != VoidCoder.of()) {
@@ -142,11 +142,11 @@ public final class StreamingTransformTranslator {
     };
   }
 
-  private static <T> TransformEvaluator<CreateStream.QueuedValues<T>> createFromQueue() {
-    return new TransformEvaluator<CreateStream.QueuedValues<T>>() {
+  private static <T> RDDTransformEvaluator<CreateStream.QueuedValues<T>> createFromQueue() {
+    return new RDDTransformEvaluator<CreateStream.QueuedValues<T>>() {
       @Override
-      public void evaluate(CreateStream.QueuedValues<T> transform, EvaluationContext context) {
-        StreamingEvaluationContext sec = (StreamingEvaluationContext) context;
+      public void evaluate(CreateStream.QueuedValues<T> transform, RDDEvaluationContext context) {
+        StreamingRDDEvaluationContext sec = (StreamingRDDEvaluationContext) context;
         Iterable<Iterable<T>> values = transform.getQueuedValues();
         Coder<T> coder = sec.getOutput(transform).getCoder();
         sec.setDStreamFromQueue(transform, values, coder);
@@ -154,12 +154,13 @@ public final class StreamingTransformTranslator {
     };
   }
 
-  private static <T> TransformEvaluator<Flatten.FlattenPCollectionList<T>> flattenPColl() {
-    return new TransformEvaluator<Flatten.FlattenPCollectionList<T>>() {
+  private static <T> RDDTransformEvaluator<Flatten.FlattenPCollectionList<T>> flattenPColl() {
+    return new RDDTransformEvaluator<Flatten.FlattenPCollectionList<T>>() {
       @SuppressWarnings("unchecked")
       @Override
-      public void evaluate(Flatten.FlattenPCollectionList<T> transform, EvaluationContext context) {
-        StreamingEvaluationContext sec = (StreamingEvaluationContext) context;
+      public void evaluate(Flatten.FlattenPCollectionList<T> transform,
+          RDDEvaluationContext context) {
+        StreamingRDDEvaluationContext sec = (StreamingRDDEvaluationContext) context;
         PCollectionList<T> pcs = sec.getInput(transform);
         JavaDStream<WindowedValue<T>> first =
             (JavaDStream<WindowedValue<T>>) sec.getStream(pcs.get(0));
@@ -173,16 +174,16 @@ public final class StreamingTransformTranslator {
     };
   }
 
-  private static <PT extends PTransform<?, ?>> TransformEvaluator<PT> rddTransform(
-      final SparkPipelineTranslator rddTranslator) {
-    return new TransformEvaluator<PT>() {
+  private static <PT extends PTransform<?, ?>> RDDTransformEvaluator<PT> rddTransform(
+      final SparkRDDPipelineTranslator rddTranslator) {
+    return new RDDTransformEvaluator<PT>() {
       @SuppressWarnings("unchecked")
       @Override
-      public void evaluate(PT transform, EvaluationContext context) {
-        TransformEvaluator<PT> rddEvaluator =
+      public void evaluate(PT transform, RDDEvaluationContext context) {
+        RDDTransformEvaluator<PT> rddEvaluator =
             rddTranslator.translate((Class<PT>) transform.getClass());
 
-        StreamingEvaluationContext sec = (StreamingEvaluationContext) context;
+        StreamingRDDEvaluationContext sec = (StreamingRDDEvaluationContext) context;
         if (sec.hasStream(transform)) {
           JavaDStreamLike<WindowedValue<Object>, ?, JavaRDD<WindowedValue<Object>>> dStream =
               (JavaDStreamLike<WindowedValue<Object>, ?, JavaRDD<WindowedValue<Object>>>)
@@ -208,14 +209,14 @@ public final class StreamingTransformTranslator {
   private static final class RDDTransform<PT extends PTransform<?, ?>>
       implements Function<JavaRDD<WindowedValue<Object>>, JavaRDD<WindowedValue<Object>>> {
 
-    private final StreamingEvaluationContext context;
+    private final StreamingRDDEvaluationContext context;
     private final AppliedPTransform<?, ?, ?> appliedPTransform;
-    private final TransformEvaluator<PT> rddEvaluator;
+    private final RDDTransformEvaluator<PT> rddEvaluator;
     private final PT transform;
 
 
-    private RDDTransform(StreamingEvaluationContext context, TransformEvaluator<PT> rddEvaluator,
-        PT transform) {
+    private RDDTransform(StreamingRDDEvaluationContext context,
+        RDDTransformEvaluator<PT> rddEvaluator, PT transform) {
       this.context = context;
       this.appliedPTransform = context.getCurrentTransform();
       this.rddEvaluator = rddEvaluator;
@@ -243,15 +244,15 @@ public final class StreamingTransformTranslator {
   }
 
   @SuppressWarnings("unchecked")
-  private static <PT extends PTransform<?, ?>> TransformEvaluator<PT> foreachRDD(
-      final SparkPipelineTranslator rddTranslator) {
-    return new TransformEvaluator<PT>() {
+  private static <PT extends PTransform<?, ?>> RDDTransformEvaluator<PT> foreachRDD(
+      final SparkRDDPipelineTranslator rddTranslator) {
+    return new RDDTransformEvaluator<PT>() {
       @Override
-      public void evaluate(PT transform, EvaluationContext context) {
-        TransformEvaluator<PT> rddEvaluator =
+      public void evaluate(PT transform, RDDEvaluationContext context) {
+        RDDTransformEvaluator<PT> rddEvaluator =
             rddTranslator.translate((Class<PT>) transform.getClass());
 
-        StreamingEvaluationContext sec = (StreamingEvaluationContext) context;
+        StreamingRDDEvaluationContext sec = (StreamingRDDEvaluationContext) context;
         if (sec.hasStream(transform)) {
           JavaDStreamLike<WindowedValue<Object>, ?, JavaRDD<WindowedValue<Object>>> dStream =
               (JavaDStreamLike<WindowedValue<Object>, ?, JavaRDD<WindowedValue<Object>>>)
@@ -273,14 +274,14 @@ public final class StreamingTransformTranslator {
   private static final class RDDOutputOperator<PT extends PTransform<?, ?>>
       implements VoidFunction<JavaRDD<WindowedValue<Object>>> {
 
-    private final StreamingEvaluationContext context;
+    private final StreamingRDDEvaluationContext context;
     private final AppliedPTransform<?, ?, ?> appliedPTransform;
-    private final TransformEvaluator<PT> rddEvaluator;
+    private final RDDTransformEvaluator<PT> rddEvaluator;
     private final PT transform;
 
 
-    private RDDOutputOperator(StreamingEvaluationContext context,
-        TransformEvaluator<PT> rddEvaluator, PT transform) {
+    private RDDOutputOperator(StreamingRDDEvaluationContext context,
+        RDDTransformEvaluator<PT> rddEvaluator, PT transform) {
       this.context = context;
       this.appliedPTransform = context.getCurrentTransform();
       this.rddEvaluator = rddEvaluator;
@@ -298,14 +299,14 @@ public final class StreamingTransformTranslator {
     }
   }
 
-  private static final TransformTranslator.FieldGetter WINDOW_FG =
-      new TransformTranslator.FieldGetter(Window.Bound.class);
+  private static final RDDTransformTranslator.FieldGetter WINDOW_FG =
+      new RDDTransformTranslator.FieldGetter(Window.Bound.class);
 
-  private static <T, W extends BoundedWindow> TransformEvaluator<Window.Bound<T>> window() {
-    return new TransformEvaluator<Window.Bound<T>>() {
+  private static <T, W extends BoundedWindow> RDDTransformEvaluator<Window.Bound<T>> window() {
+    return new RDDTransformEvaluator<Window.Bound<T>>() {
       @Override
-      public void evaluate(Window.Bound<T> transform, EvaluationContext context) {
-        StreamingEvaluationContext sec = (StreamingEvaluationContext) context;
+      public void evaluate(Window.Bound<T> transform, RDDEvaluationContext context) {
+        StreamingRDDEvaluationContext sec = (StreamingRDDEvaluationContext) context;
         //--- first we apply windowing to the stream
         WindowFn<? super T, W> windowFn = WINDOW_FG.get("windowFn", transform);
         @SuppressWarnings("unchecked")
@@ -325,7 +326,7 @@ public final class StreamingTransformTranslator {
         //--- then we apply windowing to the elements
         DoFn<T, T> addWindowsDoFn = new AssignWindowsDoFn<>(windowFn);
         DoFnFunction<T, T> dofn = new DoFnFunction<>(addWindowsDoFn,
-            ((StreamingEvaluationContext)context).getRuntimeContext(), null);
+            ((StreamingRDDEvaluationContext)context).getRuntimeContext(), null);
         @SuppressWarnings("unchecked")
         JavaDStreamLike<WindowedValue<T>, ?, JavaRDD<WindowedValue<T>>> dstream =
             (JavaDStreamLike<WindowedValue<T>, ?, JavaRDD<WindowedValue<T>>>)
@@ -335,7 +336,7 @@ public final class StreamingTransformTranslator {
     };
   }
 
-  private static final Map<Class<? extends PTransform>, TransformEvaluator<?>> EVALUATORS = Maps
+  private static final Map<Class<? extends PTransform>, RDDTransformEvaluator<?>> EVALUATORS = Maps
       .newHashMap();
 
   static {
@@ -361,9 +362,9 @@ public final class StreamingTransformTranslator {
   }
 
   @SuppressWarnings("unchecked")
-  private static <PT extends PTransform<?, ?>> TransformEvaluator<PT>
-      getTransformEvaluator(Class<PT> clazz, SparkPipelineTranslator rddTranslator) {
-    TransformEvaluator<PT> transform = (TransformEvaluator<PT>) EVALUATORS.get(clazz);
+  private static <PT extends PTransform<?, ?>> RDDTransformEvaluator<PT>
+      getTransformEvaluator(Class<PT> clazz, SparkRDDPipelineTranslator rddTranslator) {
+    RDDTransformEvaluator<PT> transform = (RDDTransformEvaluator<PT>) EVALUATORS.get(clazz);
     if (transform == null) {
       if (UNSUPPORTED_EVALUATORS.contains(clazz)) {
         throw new UnsupportedOperationException("Dataflow transformation " + clazz
@@ -389,14 +390,14 @@ public final class StreamingTransformTranslator {
   }
 
   /**
-   * Translator matches Dataflow transformation with the appropriate Spark streaming evaluator.
+   * TranslatorRDD matches Dataflow transformation with the appropriate Spark streaming evaluator.
    * rddTranslator uses Spark evaluators in transform/foreachRDD to evaluate the transformation
    */
-  public static class Translator implements SparkPipelineTranslator {
+  public static class TranslatorRDD implements SparkRDDPipelineTranslator {
 
-    private final SparkPipelineTranslator rddTranslator;
+    private final SparkRDDPipelineTranslator rddTranslator;
 
-    public Translator(SparkPipelineTranslator rddTranslator) {
+    public TranslatorRDD(SparkRDDPipelineTranslator rddTranslator) {
       this.rddTranslator = rddTranslator;
     }
 
@@ -407,7 +408,7 @@ public final class StreamingTransformTranslator {
     }
 
     @Override
-    public <PT extends PTransform<?, ?>> TransformEvaluator<PT> translate(Class<PT> clazz) {
+    public <PT extends PTransform<?, ?>> RDDTransformEvaluator<PT> translate(Class<PT> clazz) {
       return getTransformEvaluator(clazz, rddTranslator);
     }
   }

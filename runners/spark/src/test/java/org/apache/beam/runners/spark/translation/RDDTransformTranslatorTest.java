@@ -43,12 +43,12 @@ import java.nio.file.Paths;
 import java.util.List;
 
 /**
- * A test for the transforms registered in TransformTranslator.
+ * A test for the transforms registered in RDDTransformTranslator.
  * Builds a regular Dataflow pipeline with each of the mapped
  * transforms, and makes sure that they work when the pipeline is
  * executed in Spark.
  */
-public class TransformTranslatorTest {
+public class RDDTransformTranslatorTest {
   @Rule public TemporaryFolder tmp = new TemporaryFolder();
 
   /**
