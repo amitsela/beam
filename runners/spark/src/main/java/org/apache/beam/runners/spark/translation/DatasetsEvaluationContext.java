@@ -26,6 +26,7 @@ import com.google.common.base.Function;
 import com.google.common.collect.Iterables;
 import org.apache.beam.runners.spark.EvaluationResult;
 import org.apache.beam.runners.spark.coders.CoderHelpers;
+import org.apache.beam.runners.spark.coders.EncoderHelpers;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.runners.AggregatorRetrievalException;
@@ -92,18 +93,12 @@ public class DatasetsEvaluationContext implements EvaluationResult {
     @SuppressWarnings("unchecked")
     Dataset<WindowedValue<T>> getDataset() {
       if (dataset == null) {
-        // validate windowedValues is not empty because I use it to get the class for the
-        // bean Encoder
-        //TODO: should we allow to create an empty Dataset/PCollection ?
-        if (!windowedValues.iterator().hasNext()) {
-          throw new IllegalArgumentException("Cannot create a Dataset for empty values!");
-        }
         WindowedValue.ValueOnlyWindowedValueCoder<T> windowCoder =
             WindowedValue.getValueOnlyCoder(coder);
         dataset = sqlContext.createDataset(CoderHelpers.toByteArrays(windowedValues, windowCoder),
             Encoders.BINARY())
             .map(CoderHelpers.fromByteFunctionDatasets(windowCoder),
-            Encoders.bean((Class<WindowedValue<T>>) windowedValues.iterator().next().getClass()));
+            EncoderHelpers.<T>windowedValueEncoder());
       }
       return dataset;
     }
