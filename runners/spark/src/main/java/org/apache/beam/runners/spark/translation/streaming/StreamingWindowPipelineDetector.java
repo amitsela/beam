@@ -20,7 +20,7 @@ package org.apache.beam.runners.spark.translation.streaming;
 
 import org.apache.beam.runners.spark.SparkPipelineRunner;
 import org.apache.beam.runners.spark.translation.RDDTransformTranslator;
-import org.apache.beam.runners.spark.translation.SparkRDDPipelineTranslator;
+import org.apache.beam.runners.spark.translation.SparkPipelineTranslator;
 import org.apache.beam.sdk.runners.TransformTreeNode;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
@@ -45,7 +45,7 @@ public final class StreamingWindowPipelineDetector extends SparkPipelineRunner.E
   private boolean windowing;
   private Duration batchDuration;
 
-  public StreamingWindowPipelineDetector(SparkRDDPipelineTranslator translator) {
+  public StreamingWindowPipelineDetector(SparkPipelineTranslator translator) {
     super(translator);
   }
 

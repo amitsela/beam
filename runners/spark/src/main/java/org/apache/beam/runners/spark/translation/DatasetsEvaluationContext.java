@@ -98,7 +98,7 @@ public class DatasetsEvaluationContext implements EvaluationResult {
         dataset = sqlContext.createDataset(CoderHelpers.toByteArrays(windowedValues, windowCoder),
             Encoders.BINARY())
             .map(CoderHelpers.fromByteFunctionDatasets(windowCoder),
-            EncoderHelpers.<T>windowedValueEncoder());
+            EncoderHelpers.<WindowedValue<T>>encode());
       }
       return dataset;
     }
@@ -147,7 +147,8 @@ public class DatasetsEvaluationContext implements EvaluationResult {
     return runtime;
   }
 
-  protected void setCurrentTransform(AppliedPTransform<?, ?, ?> transform) {
+  @Override
+  public void setCurrentTransform(AppliedPTransform<?, ?, ?> transform) {
     this.currentTransform = transform;
   }
 

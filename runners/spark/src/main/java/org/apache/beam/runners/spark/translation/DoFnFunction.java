@@ -28,6 +28,7 @@ import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.spark.api.java.function.FlatMapFunction;
+import org.apache.spark.api.java.function.MapPartitionsFunction;
 
 /**
  * Dataflow's Do functions correspond to Spark's FlatMap functions.
@@ -35,8 +36,8 @@ import org.apache.spark.api.java.function.FlatMapFunction;
  * @param <I> Input element type.
  * @param <O> Output element type.
  */
-public class DoFnFunction<I, O> implements FlatMapFunction<Iterator<WindowedValue<I>>,
-    WindowedValue<O>> {
+public class DoFnFunction<I, O> implements MapPartitionsFunction<WindowedValue<I>,
+    WindowedValue<O>>, FlatMapFunction<Iterator<WindowedValue<I>>, WindowedValue<O>> {
   private final DoFn<I, O> mFunction;
   private final SparkRuntimeContext mRuntimeContext;
   private final Map<TupleTag<?>, BroadcastHelper<?>> mSideInputs;

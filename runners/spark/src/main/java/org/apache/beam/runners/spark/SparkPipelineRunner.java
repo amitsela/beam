@@ -18,11 +18,13 @@
 
 package org.apache.beam.runners.spark;
 
+import org.apache.beam.runners.spark.translation.DatasetsEvaluationContext;
+import org.apache.beam.runners.spark.translation.DatasetsTransformTranslator;
 import org.apache.beam.runners.spark.translation.RDDEvaluationContext;
 import org.apache.beam.runners.spark.translation.RDDTransformTranslator;
 import org.apache.beam.runners.spark.translation.SparkContextFactory;
 import org.apache.beam.runners.spark.translation.SparkPipelineEvaluator;
-import org.apache.beam.runners.spark.translation.SparkRDDPipelineTranslator;
+import org.apache.beam.runners.spark.translation.SparkPipelineTranslator;
 import org.apache.beam.runners.spark.translation.SparkProcessContext;
 import org.apache.beam.runners.spark.translation.streaming.StreamingRDDEvaluationContext;
 import org.apache.beam.runners.spark.translation.streaming.StreamingTransformTranslator;
@@ -158,7 +160,7 @@ public final class SparkPipelineRunner extends PipelineRunner<EvaluationResult> 
               .getSparkMaster(), mOptions.getAppName());
 
       if (mOptions.isStreaming()) {
-        SparkRDDPipelineTranslator translator =
+        SparkPipelineTranslator translator =
             new StreamingTransformTranslator.TranslatorRDD(new RDDTransformTranslator.TranslatorRDD());
         // if streaming - fixed window should be defined on all UNBOUNDED inputs
         StreamingWindowPipelineDetector streamingWindowPipelineDetector =
@@ -180,9 +182,9 @@ public final class SparkPipelineRunner extends PipelineRunner<EvaluationResult> 
 
         return ctxt;
       } else {
-        RDDEvaluationContext ctxt = new RDDEvaluationContext(jsc, pipeline);
-        SparkRDDPipelineTranslator translator = new RDDTransformTranslator.TranslatorRDD();
-        pipeline.traverseTopologically(new SparkPipelineEvaluator(ctxt, translator));
+        DatasetsEvaluationContext ctxt = new DatasetsEvaluationContext(jsc, pipeline);
+        pipeline.traverseTopologically(new SparkPipelineEvaluator(ctxt,
+            new DatasetsTransformTranslator.Translator()));
         ctxt.computeOutputs();
 
         LOG.info("Pipeline execution complete.");
@@ -219,9 +221,9 @@ public final class SparkPipelineRunner extends PipelineRunner<EvaluationResult> 
   public abstract static class Evaluator implements Pipeline.PipelineVisitor {
     protected static final Logger LOG = LoggerFactory.getLogger(Evaluator.class);
 
-    protected final SparkRDDPipelineTranslator translator;
+    protected final SparkPipelineTranslator translator;
 
-    protected Evaluator(SparkRDDPipelineTranslator translator) {
+    protected Evaluator(SparkPipelineTranslator translator) {
       this.translator = translator;
     }
 

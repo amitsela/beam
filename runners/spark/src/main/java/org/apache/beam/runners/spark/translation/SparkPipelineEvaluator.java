@@ -18,6 +18,7 @@
 
 package org.apache.beam.runners.spark.translation;
 
+import org.apache.beam.runners.spark.EvaluationResult;
 import org.apache.beam.runners.spark.SparkPipelineRunner;
 import org.apache.beam.sdk.runners.TransformTreeNode;
 import org.apache.beam.sdk.transforms.AppliedPTransform;
@@ -30,9 +31,9 @@ import org.apache.beam.sdk.values.POutput;
  */
 public final class SparkPipelineEvaluator extends SparkPipelineRunner.Evaluator {
 
-  private final RDDEvaluationContext ctxt;
+  private final EvaluationResult ctxt;
 
-  public SparkPipelineEvaluator(RDDEvaluationContext ctxt, SparkRDDPipelineTranslator translator) {
+  public SparkPipelineEvaluator(EvaluationResult ctxt, SparkPipelineTranslator translator) {
     super(translator);
     this.ctxt = ctxt;
   }
@@ -44,8 +45,7 @@ public final class SparkPipelineEvaluator extends SparkPipelineRunner.Evaluator 
     PT transform = (PT) node.getTransform();
     @SuppressWarnings("unchecked")
     Class<PT> transformClass = (Class<PT>) (Class<?>) transform.getClass();
-    @SuppressWarnings("unchecked") RDDTransformEvaluator<PT> evaluator =
-        (RDDTransformEvaluator<PT>) translator.translate(transformClass);
+    TransformEvaluator<PT> evaluator = translator.translate(transformClass);
     LOG.info("Evaluating {}", transform);
     AppliedPTransform<PInput, POutput, PT> appliedTransform =
         AppliedPTransform.of(node.getFullName(), node.getInput(), node.getOutput(), transform);

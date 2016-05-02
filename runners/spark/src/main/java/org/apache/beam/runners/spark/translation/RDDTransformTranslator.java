@@ -27,6 +27,7 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -36,6 +37,7 @@ import com.google.common.collect.Maps;
 import org.apache.avro.mapred.AvroKey;
 import org.apache.avro.mapreduce.AvroJob;
 import org.apache.avro.mapreduce.AvroKeyInputFormat;
+import org.apache.beam.runners.spark.EvaluationResult;
 import org.apache.beam.runners.spark.coders.CoderHelpers;
 import org.apache.beam.runners.spark.io.hadoop.HadoopIO;
 import org.apache.beam.runners.spark.io.hadoop.ShardNameTemplateHelper;
@@ -113,12 +115,13 @@ public final class RDDTransformTranslator {
     }
   }
 
-  private static <T> RDDTransformEvaluator<Flatten.FlattenPCollectionList<T>> flattenPColl() {
-    return new RDDTransformEvaluator<Flatten.FlattenPCollectionList<T>>() {
+  private static <T> TransformEvaluator<Flatten.FlattenPCollectionList<T>> flattenPColl() {
+    return new TransformEvaluator<Flatten.FlattenPCollectionList<T>>() {
       @SuppressWarnings("unchecked")
       @Override
       public void evaluate(Flatten.FlattenPCollectionList<T> transform,
-          RDDEvaluationContext context) {
+          EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         PCollectionList<T> pcs = context.getInput(transform);
         JavaRDD<WindowedValue<T>>[] rdds = new JavaRDD[pcs.size()];
         for (int i = 0; i < rdds.length; i++) {
@@ -130,10 +133,11 @@ public final class RDDTransformTranslator {
     };
   }
 
-  private static <K, V> RDDTransformEvaluator<GroupByKeyOnly<K, V>> gbk() {
-    return new RDDTransformEvaluator<GroupByKeyOnly<K, V>>() {
+  private static <K, V> TransformEvaluator<GroupByKeyOnly<K, V>> gbk() {
+    return new TransformEvaluator<GroupByKeyOnly<K, V>>() {
       @Override
-      public void evaluate(GroupByKeyOnly<K, V> transform, RDDEvaluationContext context) {
+      public void evaluate(GroupByKeyOnly<K, V> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         @SuppressWarnings("unchecked")
         JavaRDDLike<WindowedValue<KV<K, V>>, ?> inRDD =
             (JavaRDDLike<WindowedValue<KV<K, V>>, ?>) context.getInputRDD(transform);
@@ -158,11 +162,12 @@ public final class RDDTransformTranslator {
 
   private static final FieldGetter GROUPED_FG = new FieldGetter(Combine.GroupedValues.class);
 
-  private static <K, VI, VO> RDDTransformEvaluator<Combine.GroupedValues<K, VI, VO>> grouped() {
-    return new RDDTransformEvaluator<Combine.GroupedValues<K, VI, VO>>() {
+  private static <K, VI, VO> TransformEvaluator<Combine.GroupedValues<K, VI, VO>> grouped() {
+    return new TransformEvaluator<Combine.GroupedValues<K, VI, VO>>() {
       @Override
       public void evaluate(Combine.GroupedValues<K, VI, VO> transform,
-          RDDEvaluationContext context) {
+          EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         Combine.KeyedCombineFn<K, VI, ?, VO> keyed = GROUPED_FG.get("fn", transform);
         @SuppressWarnings("unchecked")
         JavaRDDLike<WindowedValue<KV<K, Iterable<VI>>>, ?> inRDD =
@@ -175,12 +180,13 @@ public final class RDDTransformTranslator {
 
   private static final FieldGetter COMBINE_GLOBALLY_FG = new FieldGetter(Combine.Globally.class);
 
-  private static <I, A, O> RDDTransformEvaluator<Combine.Globally<I, O>> combineGlobally() {
-    return new RDDTransformEvaluator<Combine.Globally<I, O>>() {
+  private static <I, A, O> TransformEvaluator<Combine.Globally<I, O>> combineGlobally() {
+    return new TransformEvaluator<Combine.Globally<I, O>>() {
 
       @Override
-      public void evaluate(Combine.Globally<I, O> transform, RDDEvaluationContext context) {
+      public void evaluate(Combine.Globally<I, O> transform, EvaluationResult ctxt) {
         final Combine.CombineFn<I, A, O> globally = COMBINE_GLOBALLY_FG.get("fn", transform);
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
 
         @SuppressWarnings("unchecked")
         JavaRDDLike<WindowedValue<I>, ?> inRdd =
@@ -237,10 +243,11 @@ public final class RDDTransformTranslator {
 
   private static final FieldGetter COMBINE_PERKEY_FG = new FieldGetter(Combine.PerKey.class);
 
-  private static <K, VI, VA, VO> RDDTransformEvaluator<Combine.PerKey<K, VI, VO>> combinePerKey() {
-    return new RDDTransformEvaluator<Combine.PerKey<K, VI, VO>>() {
+  private static <K, VI, VA, VO> TransformEvaluator<Combine.PerKey<K, VI, VO>> combinePerKey() {
+    return new TransformEvaluator<Combine.PerKey<K, VI, VO>>() {
       @Override
-      public void evaluate(Combine.PerKey<K, VI, VO> transform, RDDEvaluationContext context) {
+      public void evaluate(Combine.PerKey<K, VI, VO> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         final Combine.KeyedCombineFn<K, VI, VA, VO> keyed =
             COMBINE_PERKEY_FG.get("fn", transform);
         @SuppressWarnings("unchecked")
@@ -411,10 +418,11 @@ public final class RDDTransformTranslator {
     });
   }
 
-  private static <I, O> RDDTransformEvaluator<ParDo.Bound<I, O>> parDo() {
-    return new RDDTransformEvaluator<ParDo.Bound<I, O>>() {
+  private static <I, O> TransformEvaluator<ParDo.Bound<I, O>> parDo() {
+    return new TransformEvaluator<ParDo.Bound<I, O>>() {
       @Override
-      public void evaluate(ParDo.Bound<I, O> transform, RDDEvaluationContext context) {
+      public void evaluate(ParDo.Bound<I, O> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         DoFnFunction<I, O> dofn =
             new DoFnFunction<>(transform.getFn(),
                 context.getRuntimeContext(),
@@ -429,10 +437,11 @@ public final class RDDTransformTranslator {
 
   private static final FieldGetter MULTIDO_FG = new FieldGetter(ParDo.BoundMulti.class);
 
-  private static <I, O> RDDTransformEvaluator<ParDo.BoundMulti<I, O>> multiDo() {
-    return new RDDTransformEvaluator<ParDo.BoundMulti<I, O>>() {
+  private static <I, O> TransformEvaluator<ParDo.BoundMulti<I, O>> multiDo() {
+    return new TransformEvaluator<ParDo.BoundMulti<I, O>>() {
       @Override
-      public void evaluate(ParDo.BoundMulti<I, O> transform, RDDEvaluationContext context) {
+      public void evaluate(ParDo.BoundMulti<I, O> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         TupleTag<O> mainOutputTag = MULTIDO_FG.get("mainOutputTag", transform);
         MultiDoFnFunction<I, O> multifn = new MultiDoFnFunction<>(
             transform.getFn(),
@@ -463,10 +472,11 @@ public final class RDDTransformTranslator {
   }
 
 
-  private static <T> RDDTransformEvaluator<TextIO.Read.Bound<T>> readText() {
-    return new RDDTransformEvaluator<TextIO.Read.Bound<T>>() {
+  private static <T> TransformEvaluator<TextIO.Read.Bound<T>> readText() {
+    return new TransformEvaluator<TextIO.Read.Bound<T>>() {
       @Override
-      public void evaluate(TextIO.Read.Bound<T> transform, RDDEvaluationContext context) {
+      public void evaluate(TextIO.Read.Bound<T> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         String pattern = transform.getFilepattern();
         JavaRDD<WindowedValue<String>> rdd = context.getSparkContext().textFile(pattern)
                 .map(WindowingHelpers.<String>windowFunction());
@@ -475,10 +485,11 @@ public final class RDDTransformTranslator {
     };
   }
 
-  private static <T> RDDTransformEvaluator<TextIO.Write.Bound<T>> writeText() {
-    return new RDDTransformEvaluator<TextIO.Write.Bound<T>>() {
+  private static <T> TransformEvaluator<TextIO.Write.Bound<T>> writeText() {
+    return new TransformEvaluator<TextIO.Write.Bound<T>>() {
       @Override
-      public void evaluate(TextIO.Write.Bound<T> transform, RDDEvaluationContext context) {
+      public void evaluate(TextIO.Write.Bound<T> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         @SuppressWarnings("unchecked")
         JavaPairRDD<T, Void> last =
             ((JavaRDDLike<WindowedValue<T>, ?>) context.getInputRDD(transform))
@@ -500,10 +511,11 @@ public final class RDDTransformTranslator {
     };
   }
 
-  private static <T> RDDTransformEvaluator<AvroIO.Read.Bound<T>> readAvro() {
-    return new RDDTransformEvaluator<AvroIO.Read.Bound<T>>() {
+  private static <T> TransformEvaluator<AvroIO.Read.Bound<T>> readAvro() {
+    return new TransformEvaluator<AvroIO.Read.Bound<T>>() {
       @Override
-      public void evaluate(AvroIO.Read.Bound<T> transform, RDDEvaluationContext context) {
+      public void evaluate(AvroIO.Read.Bound<T> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         String pattern = transform.getFilepattern();
         JavaSparkContext jsc = context.getSparkContext();
         @SuppressWarnings("unchecked")
@@ -524,10 +536,11 @@ public final class RDDTransformTranslator {
     };
   }
 
-  private static <T> RDDTransformEvaluator<AvroIO.Write.Bound<T>> writeAvro() {
-    return new RDDTransformEvaluator<AvroIO.Write.Bound<T>>() {
+  private static <T> TransformEvaluator<AvroIO.Write.Bound<T>> writeAvro() {
+    return new TransformEvaluator<AvroIO.Write.Bound<T>>() {
       @Override
-      public void evaluate(AvroIO.Write.Bound<T> transform, RDDEvaluationContext context) {
+      public void evaluate(AvroIO.Write.Bound<T> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         Job job;
         try {
           job = Job.getInstance();
@@ -555,10 +568,11 @@ public final class RDDTransformTranslator {
     };
   }
 
-  private static <K, V> RDDTransformEvaluator<HadoopIO.Read.Bound<K, V>> readHadoop() {
-    return new RDDTransformEvaluator<HadoopIO.Read.Bound<K, V>>() {
+  private static <K, V> TransformEvaluator<HadoopIO.Read.Bound<K, V>> readHadoop() {
+    return new TransformEvaluator<HadoopIO.Read.Bound<K, V>>() {
       @Override
-      public void evaluate(HadoopIO.Read.Bound<K, V> transform, RDDEvaluationContext context) {
+      public void evaluate(HadoopIO.Read.Bound<K, V> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         String pattern = transform.getFilepattern();
         JavaSparkContext jsc = context.getSparkContext();
         @SuppressWarnings ("unchecked")
@@ -578,10 +592,11 @@ public final class RDDTransformTranslator {
     };
   }
 
-  private static <K, V> RDDTransformEvaluator<HadoopIO.Write.Bound<K, V>> writeHadoop() {
-    return new RDDTransformEvaluator<HadoopIO.Write.Bound<K, V>>() {
+  private static <K, V> TransformEvaluator<HadoopIO.Write.Bound<K, V>> writeHadoop() {
+    return new TransformEvaluator<HadoopIO.Write.Bound<K, V>>() {
       @Override
-      public void evaluate(HadoopIO.Write.Bound<K, V> transform, RDDEvaluationContext context) {
+      public void evaluate(HadoopIO.Write.Bound<K, V> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         @SuppressWarnings("unchecked")
         JavaPairRDD<K, V> last = ((JavaRDDLike<WindowedValue<KV<K, V>>, ?>) context
             .getInputRDD(transform))
@@ -662,10 +677,11 @@ public final class RDDTransformTranslator {
 
   private static final FieldGetter WINDOW_FG = new FieldGetter(Window.Bound.class);
 
-  private static <T, W extends BoundedWindow> RDDTransformEvaluator<Window.Bound<T>> window() {
-    return new RDDTransformEvaluator<Window.Bound<T>>() {
+  private static <T, W extends BoundedWindow> TransformEvaluator<Window.Bound<T>> window() {
+    return new TransformEvaluator<Window.Bound<T>>() {
       @Override
-      public void evaluate(Window.Bound<T> transform, RDDEvaluationContext context) {
+      public void evaluate(Window.Bound<T> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         @SuppressWarnings("unchecked")
         JavaRDDLike<WindowedValue<T>, ?> inRDD =
             (JavaRDDLike<WindowedValue<T>, ?>) context.getInputRDD(transform);
@@ -683,10 +699,11 @@ public final class RDDTransformTranslator {
     };
   }
 
-  private static <T> RDDTransformEvaluator<Create.Values<T>> create() {
-    return new RDDTransformEvaluator<Create.Values<T>>() {
+  private static <T> TransformEvaluator<Create.Values<T>> create() {
+    return new TransformEvaluator<Create.Values<T>>() {
       @Override
-      public void evaluate(Create.Values<T> transform, RDDEvaluationContext context) {
+      public void evaluate(Create.Values<T> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         Iterable<T> elems = transform.getElements();
         // Use a coder to convert the objects in the PCollection to byte arrays, so they
         // can be transferred over the network.
@@ -696,10 +713,11 @@ public final class RDDTransformTranslator {
     };
   }
 
-  private static <T> RDDTransformEvaluator<View.AsSingleton<T>> viewAsSingleton() {
-    return new RDDTransformEvaluator<View.AsSingleton<T>>() {
+  private static <T> TransformEvaluator<View.AsSingleton<T>> viewAsSingleton() {
+    return new TransformEvaluator<View.AsSingleton<T>>() {
       @Override
-      public void evaluate(View.AsSingleton<T> transform, RDDEvaluationContext context) {
+      public void evaluate(View.AsSingleton<T> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         Iterable<? extends WindowedValue<?>> iter =
                 context.getWindowedValues(context.getInput(transform));
         context.setPView(context.getOutput(transform), iter);
@@ -707,10 +725,11 @@ public final class RDDTransformTranslator {
     };
   }
 
-  private static <T> RDDTransformEvaluator<View.AsIterable<T>> viewAsIter() {
-    return new RDDTransformEvaluator<View.AsIterable<T>>() {
+  private static <T> TransformEvaluator<View.AsIterable<T>> viewAsIter() {
+    return new TransformEvaluator<View.AsIterable<T>>() {
       @Override
-      public void evaluate(View.AsIterable<T> transform, RDDEvaluationContext context) {
+      public void evaluate(View.AsIterable<T> transform, EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         Iterable<? extends WindowedValue<?>> iter =
                 context.getWindowedValues(context.getInput(transform));
         context.setPView(context.getOutput(transform), iter);
@@ -718,11 +737,12 @@ public final class RDDTransformTranslator {
     };
   }
 
-  private static <R, W> RDDTransformEvaluator<View.CreatePCollectionView<R, W>> createPCollView() {
-    return new RDDTransformEvaluator<View.CreatePCollectionView<R, W>>() {
+  private static <R, W> TransformEvaluator<View.CreatePCollectionView<R, W>> createPCollView() {
+    return new TransformEvaluator<View.CreatePCollectionView<R, W>>() {
       @Override
       public void evaluate(View.CreatePCollectionView<R, W> transform,
-          RDDEvaluationContext context) {
+          EvaluationResult ctxt) {
+        RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
         Iterable<? extends WindowedValue<?>> iter =
             context.getWindowedValues(context.getInput(transform));
         context.setPView(context.getOutput(transform), iter);
@@ -747,7 +767,8 @@ public final class RDDTransformTranslator {
 
   private static Map<TupleTag<?>, BroadcastHelper<?>> getSideInputs(
       List<PCollectionView<?>> views,
-      RDDEvaluationContext context) {
+      EvaluationResult ctxt) {
+    RDDEvaluationContext context = (RDDEvaluationContext) ctxt;
     if (views == null) {
       return ImmutableMap.of();
     } else {
@@ -766,7 +787,7 @@ public final class RDDTransformTranslator {
     }
   }
 
-  private static final Map<Class<? extends PTransform>, RDDTransformEvaluator<?>> EVALUATORS = Maps
+  private static final Map<Class<? extends PTransform>, TransformEvaluator<?>> EVALUATORS = Maps
       .newHashMap();
 
   static {
@@ -790,12 +811,12 @@ public final class RDDTransformTranslator {
     EVALUATORS.put(Window.Bound.class, window());
   }
 
-  public static <PT extends PTransform<?, ?>> RDDTransformEvaluator<PT>
+  public static <PT extends PTransform<?, ?>> TransformEvaluator<PT>
   getTransformEvaluator(Class<PT> clazz) {
     @SuppressWarnings("unchecked")
-    RDDTransformEvaluator<PT> transform = (RDDTransformEvaluator<PT>) EVALUATORS.get(clazz);
+    TransformEvaluator<PT> transform = (TransformEvaluator<PT>) EVALUATORS.get(clazz);
     if (transform == null) {
-      throw new IllegalStateException("No RDDTransformEvaluator registered for " + clazz);
+      throw new IllegalStateException("No TransformEvaluator registered for " + clazz);
     }
     return transform;
   }
@@ -803,7 +824,7 @@ public final class RDDTransformTranslator {
   /**
    * TranslatorRDD matches Dataflow transformation with the appropriate evaluator.
    */
-  public static class TranslatorRDD implements SparkRDDPipelineTranslator {
+  public static class TranslatorRDD implements SparkPipelineTranslator {
 
     @Override
     public boolean hasTranslation(Class<? extends PTransform<?, ?>> clazz) {
@@ -811,7 +832,7 @@ public final class RDDTransformTranslator {
     }
 
     @Override
-    public <PT extends PTransform<?, ?>> RDDTransformEvaluator<PT> translate(Class<PT> clazz) {
+    public <PT extends PTransform<?, ?>> TransformEvaluator<PT> translate(Class<PT> clazz) {
       return getTransformEvaluator(clazz);
     }
   }

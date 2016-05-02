@@ -19,6 +19,7 @@
 package org.apache.beam.runners.spark;
 
 import org.apache.beam.sdk.PipelineResult;
+import org.apache.beam.sdk.transforms.AppliedPTransform;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PValue;
 
@@ -62,4 +63,7 @@ public interface EvaluationResult extends PipelineResult {
    * not work for subsequent calls.
    */
   void close();
+
+  // support multiple evaluation context
+  void setCurrentTransform(AppliedPTransform<?, ?, ?> transform);
 }
