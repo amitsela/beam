@@ -7,7 +7,8 @@ import org.apache.spark.sql.Encoders;
  * {@link org.apache.spark.sql.Encoders} utility class - currently only kryo
  * provides a solid support for nested, generically typed, classes.
  *
- * Providing helper methods for some commonly used encoding in the Spark runner.
+ * //TODO: write custom Encoders for common, generically typed, Beam Classes such as
+ * {@link org.apache.beam.sdk.util.WindowedValue}, {@link org.apache.beam.sdk.values.KV}
  */
 public final class EncoderHelpers {
 
