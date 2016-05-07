@@ -19,9 +19,9 @@
 package org.apache.beam.runners.spark.translation;
 
 import com.google.api.client.util.Lists;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
-import com.google.common.collect.Iterators;
 import com.google.common.collect.Maps;
 
 import org.apache.beam.runners.spark.EvaluationResult;
@@ -29,14 +29,13 @@ import org.apache.beam.runners.spark.coders.EncoderHelpers;
 import org.apache.beam.runners.spark.io.hadoop.ShardNameTemplateHelper;
 import org.apache.beam.runners.spark.io.hadoop.TemplatedTextOutputFormat;
 import org.apache.beam.runners.spark.util.BroadcastHelper;
-import org.apache.beam.sdk.coders.CannotProvideCoderException;
 import org.apache.beam.sdk.coders.Coder;
-import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.Flatten;
+import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.View;
@@ -45,12 +44,9 @@ import org.apache.beam.sdk.transforms.windowing.GlobalWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.util.AssignWindowsDoFn;
-import org.apache.beam.sdk.util.GroupByKeyViaGroupByKeyOnly.GroupByKeyOnly;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionList;
-import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.hadoop.conf.Configuration;
@@ -58,20 +54,19 @@ import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.spark.api.java.JavaPairRDD;
-import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaRDDLike;
 import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.MapFunction;
-import org.apache.spark.api.java.function.MapGroupsFunction;
 import org.apache.spark.api.java.function.PairFunction;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Encoders;
 import org.apache.spark.sql.GroupedDataset;
+import org.apache.spark.sql.expressions.Aggregator;
 
 import java.lang.reflect.Field;
-import java.util.ArrayList;
-import java.util.Iterator;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -130,64 +125,89 @@ public final class DatasetsTransformTranslator {
     };
   }
 
-  private static <K, V> TransformEvaluator<GroupByKeyOnly<K, V>> gbk() {
-    return new TransformEvaluator<GroupByKeyOnly<K, V>>() {
+  private static <K, V> TransformEvaluator<GroupByKey<K, V>> gbk() {
+    return new TransformEvaluator<GroupByKey<K, V>>() {
       @Override
-      public void evaluate(GroupByKeyOnly<K, V> transform, EvaluationResult ctxt) {
+      public void evaluate(GroupByKey<K, V> transform, EvaluationResult ctxt) {
         DatasetsEvaluationContext context = (DatasetsEvaluationContext) ctxt;
         @SuppressWarnings("unchecked")
         Dataset<WindowedValue<KV<K, V>>> inDataset =
             (Dataset<WindowedValue<KV<K, V>>>) context.getInputDataset(transform);
-        @SuppressWarnings("unchecked")
-        KvCoder<K, V> coder = (KvCoder<K, V>) context.getInput(transform).getCoder();
-        //TODO: is there a way to use the coders and serialize the key before the shuffle ?
-        Coder<K> keyCoder = coder.getKeyCoder();
-        final Coder<V> valueCoder = coder.getValueCoder();
 
-        GroupedDataset<K, WindowedValue<KV<K, V>>> groupedDataset = inDataset
-            .groupBy(new MapFunction<WindowedValue<KV<K, V>>, K>() {
+
+//        @SuppressWarnings("unchecked")
+//        KvCoder<K, V> coder = (KvCoder<K, V>) context.getInput(transform).getCoder();
+//        Coder<K> keyCoder = coder.getKeyCoder();
+//        final Coder<V> valueCoder = coder.getValueCoder();
+
+        //TODO: transform inDataset into Dataset<Tuple2<K as byte[],
+        // WindowedValue<KV<K, V>> as byte[]>> which will be trivial for grouping
+        // use coders for that
+
+
+        GroupedDataset<WindowedValue<K>, WindowedValue<KV<K, V>>> groupedDataset = inDataset
+            .groupBy(new MapFunction<WindowedValue<KV<K, V>>, WindowedValue<K>>() {
               @Override
-              public K call(WindowedValue<KV<K, V>> wkv) throws Exception {
-                return wkv.getValue().getKey();
+              public WindowedValue<K> call(WindowedValue<KV<K, V>> wkv) throws Exception {
+                return WindowedValue.of(wkv.getValue().getKey(), wkv.getTimestamp(),
+                        wkv.getWindows(), wkv.getPane());
               }
-            }, EncoderHelpers.<K>encode());
+            }, EncoderHelpers.<WindowedValue<K>>encode());
 
-        Dataset<WindowedValue<KV<K, Iterable<V>>>> outDataset = groupedDataset.mapGroups(
-            new MapGroupsFunction<K, WindowedValue<KV<K,V>>, WindowedValue<KV<K, Iterable<V>>>>() {
-          @Override
-          public WindowedValue<KV<K, Iterable<V>>> call(K key,
-              Iterator<WindowedValue<KV<K, V>>> values) throws Exception {
-            List<V> materialized = Lists.newArrayList();
-            // OOM hazard!!! doesn't seem like groupBy() has a good solution here..
-            // since GroupedDataset is not a Dataset, we should consider having a GroupDatasetHolder
-            // that will be used in post GroupByKey transformations
-            while (values.hasNext()) {
-              materialized.add(values.next().getValue().getValue());
-            }
-            return WindowedValue.valueInGlobalWindow(KV.of(key,
-                Iterables.unmodifiableIterable(materialized)));
-          }
-        }, EncoderHelpers.<WindowedValue<KV<K, Iterable<V>>>>encode());
-
-        context.setOutputDataset(transform, outDataset);
+        context.setOutputGroupedDataset(transform, groupedDataset);
       }
     };
   }
 
   private static final FieldGetter GROUPED_FG = new FieldGetter(Combine.GroupedValues.class);
 
-  private static <K, VI, VO> TransformEvaluator<Combine.GroupedValues<K, VI, VO>> grouped() {
+  private static <K, VI, VA, VO> TransformEvaluator<Combine.GroupedValues<K, VI, VO>> grouped() {
     return new TransformEvaluator<Combine.GroupedValues<K, VI, VO>>() {
       @Override
       public void evaluate(Combine.GroupedValues<K, VI, VO> transform,
           EvaluationResult ctxt) {
         DatasetsEvaluationContext context = (DatasetsEvaluationContext) ctxt;
-        Combine.KeyedCombineFn<K, VI, ?, VO> keyed = GROUPED_FG.get("fn", transform);
+        final Combine.KeyedCombineFn<K, VI, VA, VO> keyed = GROUPED_FG.get("fn", transform);
+
+        Aggregator<WindowedValue<KV<K, VI>>, VA, VO> agg =
+            new Aggregator<WindowedValue<KV<K, VI>>, VA, VO>() {
+              @Override
+              public VA zero() {
+                return keyed.createAccumulator(null);
+              }
+
+              @Override
+              public VA reduce(VA vb, WindowedValue<KV<K, VI>> a) {
+                return keyed.addInput(null, vb, a.getValue().getValue());
+              }
+
+              @Override
+              public VA merge(VA b1, VA b2) {
+                return keyed.mergeAccumulators(null, ImmutableList.of(b1, b2));
+              }
+
+              @Override
+              public VO finish(VA reduction) {
+                return keyed.extractOutput(null, reduction);
+              }
+            };
+
         @SuppressWarnings("unchecked")
-        Dataset<WindowedValue<KV<K, Iterable<VI>>>> dataset =
-            (Dataset<WindowedValue<KV<K, Iterable<VI>>>>) context.getInputDataset(transform);
-        context.setOutputDataset(transform,
-            dataset.map(new KVFunction<>(keyed), EncoderHelpers.<WindowedValue<KV<K, VO>>>encode()));
+        GroupedDataset<WindowedValue<K>, WindowedValue<KV<K, VI>>> groupedDataset =
+            (GroupedDataset<WindowedValue<K>, WindowedValue<KV<K, VI>>>) context.getInputGroupedDataset(transform);
+        Dataset<WindowedValue<KV<K, VO>>> outDataset =
+            groupedDataset.agg(agg.toColumn(EncoderHelpers.<VA>encode(),
+                    EncoderHelpers.<VO>encode()))
+            .map(new MapFunction<Tuple2<WindowedValue<K>, VO>, WindowedValue<KV<K, VO>>>() {
+              @Override
+              public WindowedValue<KV<K, VO>> call(Tuple2<WindowedValue<K>, VO> tuple2) throws
+                      Exception {
+                WindowedValue<K> wk = tuple2._1();
+                return WindowedValue.of(KV.of(wk.getValue(), tuple2._2()), wk.getTimestamp(),
+                    wk.getWindows(), wk.getPane());
+              }
+            }, EncoderHelpers.<WindowedValue<KV<K, VO>>>encode());
+        context.setOutputDataset(transform, outDataset);
       }
     };
   }
@@ -262,139 +282,126 @@ public final class DatasetsTransformTranslator {
       public void evaluate(Combine.PerKey<K, VI, VO> transform, EvaluationResult ctxt) {
         DatasetsEvaluationContext context = (DatasetsEvaluationContext) ctxt;
         final Combine.KeyedCombineFn<K, VI, VA, VO> keyed = COMBINE_PERKEY_FG.get("fn", transform);
+        Aggregator<WindowedValue<KV<K, VI>>, WindowedValue<KV<K, VA>>,
+            WindowedValue<KV<K, VO>>> agg = new Aggregator<WindowedValue<KV<K, VI>>,
+            WindowedValue<KV<K, VA>>, WindowedValue<KV<K, VO>>>() {
+          @Override
+          public WindowedValue<KV<K, VA>> zero() {
+            return null;
+          }
+
+          @Override
+          public WindowedValue<KV<K, VA>> reduce(WindowedValue<KV<K, VA>> wkva,
+                                                 WindowedValue<KV<K, VI>> wkvi) {
+            K key = wkvi.getValue().getKey();
+            if (wkva == null) {
+              // create accumulator if not created yet
+              VA va = keyed.createAccumulator(key);
+              wkva = composeWkv(va, wkvi);
+            }
+            // add input to accumulator
+            VA va = keyed.addInput(key, wkva.getValue().getValue(), wkvi.getValue().getValue());
+            return composeWkv(va, wkvi);
+          }
+
+          private <VV, VW> WindowedValue<KV<K, VV>> composeWkv(VV va, WindowedValue<KV<K, VW>> wkvv) {
+            return WindowedValue.of(KV.of(wkvv.getValue().getKey(), va), wkvv.getTimestamp(),
+                wkvv.getWindows(), wkvv.getPane());
+          }
+
+          @Override
+          public WindowedValue<KV<K, VA>> merge(WindowedValue<KV<K, VA>> wkva1,
+                                                WindowedValue<KV<K, VA>> wkva2) {
+            if (wkva1 == null) {
+              return wkva2;
+            } else if (wkva2 == null) {
+              return wkva1;
+            } else {
+              VA va = keyed.mergeAccumulators(wkva1.getValue().getKey(),
+                      Collections.unmodifiableList(Arrays.asList(wkva1.getValue().getValue(),
+                          wkva2.getValue().getValue())));
+              return composeWkv(va, wkva1);
+            }
+          }
+
+          @Override
+          public WindowedValue<KV<K, VO>> finish(WindowedValue<KV<K, VA>> wkva) {
+            K key = wkva.getValue().getKey();
+            VA va = wkva.getValue().getValue();
+            VO vo = keyed.extractOutput(key, va);
+            return composeWkv(vo, wkva);
+          }
+        };
 
         @SuppressWarnings("unchecked")
         Dataset<WindowedValue<KV<K, VI>>> inDataset =
             (Dataset<WindowedValue<KV<K, VI>>>) context.getInputDataset(transform);
-        inDataset.flatMap(new FlatMapFunction<WindowedValue<KV<K,VI>>, Object>() {
-        });
-        
-        
-        @SuppressWarnings("unchecked")
-        KvCoder<K, VI> inputCoder = (KvCoder<K, VI>) context.getInput(transform).getCoder();
-        Coder<K> keyCoder = inputCoder.getKeyCoder();
-        Coder<VI> viCoder = inputCoder.getValueCoder();
-        Coder<VA> vaCoder;
-        try {
-          vaCoder = keyed.getAccumulatorCoder(
-              context.getPipeline().getCoderRegistry(), keyCoder, viCoder);
-        } catch (CannotProvideCoderException e) {
-          throw new IllegalStateException("Could not determine coder for accumulator", e);
-        }
-        Coder<KV<K, VI>> kviCoder = KvCoder.of(keyCoder, viCoder);
-        Coder<KV<K, VA>> kvaCoder = KvCoder.of(keyCoder, vaCoder);
+        inDataset.flatMap(new FlatMapFunction<WindowedValue<KV<K,VI>>, WindowedValue<KV<K,VI>>>() {
+          @Override
+          public Iterable<WindowedValue<KV<K, VI>>>
+          call(WindowedValue<KV<K, VI>> wkv) throws Exception {
+            List<WindowedValue<KV<K, VI>>> windowedValues = Lists.newArrayList();
+            // flatMap all windows this value belongs to
+            for (BoundedWindow boundedWindow: wkv.getWindows()) {
+              KV<K, VI> kv = wkv.getValue();
+              windowedValues.add(WindowedValue.of(kv, boundedWindow.maxTimestamp(), boundedWindow,
+                  wkv.getPane()));
+            }
+            return Iterables.unmodifiableIterable(windowedValues);
+          }
+        }, EncoderHelpers.<WindowedValue<KV<K, VI>>>encode());
 
-        // We need to duplicate K as both the key of the JavaPairRDD as well as inside the value,
-        // since the functions passed to combineByKey don't receive the associated key of each
-        // value, and we need to map back into methods in Combine.KeyedCombineFn, which each
-        // require the key in addition to the VI's and VA's being merged/accumulated. Once Spark
-        // provides a way to include keys in the arguments of combine/merge functions, we won't
-        // need to duplicate the keys anymore.
 
-        // Key has to bw windowed in order to group by window as well
-        JavaPairRDD<WindowedValue<K>, WindowedValue<KV<K, VI>>> inRddDuplicatedKeyPair =
-            inRdd.flatMapToPair(
-                new PairFlatMapFunction<WindowedValue<KV<K, VI>>, WindowedValue<K>,
-                    WindowedValue<KV<K, VI>>>() {
-                  @Override
-                  public Iterable<Tuple2<WindowedValue<K>,
-                      WindowedValue<KV<K, VI>>>> call(WindowedValue<KV<K, VI>> kv) {
-                      List<Tuple2<WindowedValue<K>,
-                          WindowedValue<KV<K, VI>>>> tuple2s =
-                          Lists.newArrayListWithCapacity(kv.getWindows().size());
-                      for (BoundedWindow boundedWindow: kv.getWindows()) {
-                        WindowedValue<K> wk = WindowedValue.of(kv.getValue().getKey(),
-                            boundedWindow.maxTimestamp(), boundedWindow, kv.getPane());
-                        tuple2s.add(new Tuple2<>(wk, kv));
-                      }
-                    return tuple2s;
-                  }
-                });
+//        @SuppressWarnings("unchecked")
+//        KvCoder<K, VI> inputCoder = (KvCoder<K, VI>) context.getInput(transform).getCoder();
+//        Coder<K> keyCoder = inputCoder.getKeyCoder();
+//        Coder<VI> viCoder = inputCoder.getValueCoder();
+//        Coder<VA> vaCoder;
+//        try {
+//          vaCoder = keyed.getAccumulatorCoder(
+//              context.getPipeline().getCoderRegistry(), keyCoder, viCoder);
+//        } catch (CannotProvideCoderException e) {
+//          throw new IllegalStateException("Could not determine coder for accumulator", e);
+//        }
+//        Coder<KV<K, VI>> kviCoder = KvCoder.of(keyCoder, viCoder);
+//        Coder<KV<K, VA>> kvaCoder = KvCoder.of(keyCoder, vaCoder);
         //-- windowed coders
-        final WindowedValue.FullWindowedValueCoder<K> wkCoder =
-                WindowedValue.FullWindowedValueCoder.of(keyCoder,
-                context.getInput(transform).getWindowingStrategy().getWindowFn().windowCoder());
-        final WindowedValue.FullWindowedValueCoder<KV<K, VI>> wkviCoder =
-                WindowedValue.FullWindowedValueCoder.of(kviCoder,
-                context.getInput(transform).getWindowingStrategy().getWindowFn().windowCoder());
-        final WindowedValue.FullWindowedValueCoder<KV<K, VA>> wkvaCoder =
-                WindowedValue.FullWindowedValueCoder.of(kvaCoder,
-                context.getInput(transform).getWindowingStrategy().getWindowFn().windowCoder());
+//        final WindowedValue.FullWindowedValueCoder<K> wkCoder =
+//                WindowedValue.FullWindowedValueCoder.of(keyCoder,
+//                context.getInput(transform).getWindowingStrategy().getWindowFn().windowCoder());
+//        final WindowedValue.FullWindowedValueCoder<KV<K, VI>> wkviCoder =
+//                WindowedValue.FullWindowedValueCoder.of(kviCoder,
+//                context.getInput(transform).getWindowingStrategy().getWindowFn().windowCoder());
+//        final WindowedValue.FullWindowedValueCoder<KV<K, VA>> wkvaCoder =
+//                WindowedValue.FullWindowedValueCoder.of(kvaCoder,
+//                context.getInput(transform).getWindowingStrategy().getWindowFn().windowCoder());
 
-        // Use coders to convert objects in the PCollection to byte arrays, so they
+        //TODO: Use coders to convert objects in the PCollection to byte arrays, so they
         // can be transferred over the network for the shuffle.
-        JavaPairRDD<ByteArray, byte[]> inRddDuplicatedKeyPairBytes = inRddDuplicatedKeyPair
-            .mapToPair(CoderHelpers.toByteFunction(wkCoder, wkviCoder));
 
-        // The output of combineByKey will be "VA" (accumulator) types rather than "VO" (final
-        // output types) since Combine.CombineFn only provides ways to merge VAs, and no way
-        // to merge VOs.
-        JavaPairRDD</*K*/ ByteArray, /*KV<K, VA>*/ byte[]> accumulatedBytes =
-            inRddDuplicatedKeyPairBytes.combineByKey(
-            new Function</*KV<K, VI>*/ byte[], /*KV<K, VA>*/ byte[]>() {
-              @Override
-              public /*KV<K, VA>*/ byte[] call(/*KV<K, VI>*/ byte[] input) {
-                WindowedValue<KV<K, VI>> wkvi = CoderHelpers.fromByteArray(input, wkviCoder);
-                VA va = keyed.createAccumulator(wkvi.getValue().getKey());
-                va = keyed.addInput(wkvi.getValue().getKey(), va, wkvi.getValue().getValue());
-                WindowedValue<KV<K, VA>> wkva =
-                    WindowedValue.of(KV.of(wkvi.getValue().getKey(), va), wkvi.getTimestamp(),
-                    wkvi.getWindows(), wkvi.getPane());
-                return CoderHelpers.toByteArray(wkva, wkvaCoder);
-              }
-            },
-            new Function2</*KV<K, VA>*/ byte[], /*KV<K, VI>*/ byte[], /*KV<K, VA>*/ byte[]>() {
-              @Override
-              public /*KV<K, VA>*/ byte[] call(/*KV<K, VA>*/ byte[] acc,
-                  /*KV<K, VI>*/ byte[] input) {
-                WindowedValue<KV<K, VA>> wkva = CoderHelpers.fromByteArray(acc, wkvaCoder);
-                WindowedValue<KV<K, VI>> wkvi = CoderHelpers.fromByteArray(input, wkviCoder);
-                VA va = keyed.addInput(wkva.getValue().getKey(), wkva.getValue().getValue(),
-                    wkvi.getValue().getValue());
-                wkva = WindowedValue.of(KV.of(wkva.getValue().getKey(), va), wkva.getTimestamp(),
-                    wkva.getWindows(), wkva.getPane());
-                return CoderHelpers.toByteArray(wkva, wkvaCoder);
-              }
-            },
-            new Function2</*KV<K, VA>*/ byte[], /*KV<K, VA>*/ byte[], /*KV<K, VA>*/ byte[]>() {
-              @Override
-              public /*KV<K, VA>*/ byte[] call(/*KV<K, VA>*/ byte[] acc1,
-                  /*KV<K, VA>*/ byte[] acc2) {
-                WindowedValue<KV<K, VA>> wkva1 = CoderHelpers.fromByteArray(acc1, wkvaCoder);
-                WindowedValue<KV<K, VA>> wkva2 = CoderHelpers.fromByteArray(acc2, wkvaCoder);
-                VA va = keyed.mergeAccumulators(wkva1.getValue().getKey(),
-                    // don't use Guava's ImmutableList.of as values may be null
-                    Collections.unmodifiableList(Arrays.asList(wkva1.getValue().getValue(),
-                    wkva2.getValue().getValue())));
-                WindowedValue<KV<K, VA>> wkva = WindowedValue.of(KV.of(wkva1.getValue().getKey(),
-                    va), wkva1.getTimestamp(), wkva1.getWindows(), wkva1.getPane());
-                return CoderHelpers.toByteArray(wkva, wkvaCoder);
-              }
-            });
 
-        JavaPairRDD<WindowedValue<K>, WindowedValue<VO>> extracted = accumulatedBytes
-            .mapToPair(CoderHelpers.fromByteFunction(wkCoder, wkvaCoder))
-            .mapValues(
-                new Function<WindowedValue<KV<K, VA>>, WindowedValue<VO>>() {
-                  @Override
-                  public WindowedValue<VO> call(WindowedValue<KV<K, VA>> acc) {
-                    return WindowedValue.of(keyed.extractOutput(acc.getValue().getKey(),
-                        acc.getValue().getValue()), acc.getTimestamp(),
-                        acc.getWindows(), acc.getPane());
-                  }
-                });
-
-        context.setOutputDataset(transform,
-            fromPair(extracted)
-            .map(new Function<KV<WindowedValue<K>, WindowedValue<VO>>, WindowedValue<KV<K, VO>>>() {
+        GroupedDataset<WindowedValue<K>, WindowedValue<KV<K, VI>>> grouped =
+            inDataset.groupBy(new MapFunction<WindowedValue<KV<K, VI>>, WindowedValue<K>>() {
               @Override
-              public WindowedValue<KV<K, VO>> call(KV<WindowedValue<K>, WindowedValue<VO>> kwvo)
-                  throws Exception {
-                WindowedValue<VO> wvo = kwvo.getValue();
-                KV<K, VO> kvo = KV.of(kwvo.getKey().getValue(), wvo.getValue());
-                return WindowedValue.of(kvo, wvo.getTimestamp(), wvo.getWindows(), wvo.getPane());
+              public WindowedValue<K> call(WindowedValue<KV<K, VI>> wkv) throws Exception {
+                K key = wkv.getValue().getKey();
+                return WindowedValue.of(key, wkv.getTimestamp(), wkv.getWindows(), wkv.getPane());
               }
-            }));
+            }, EncoderHelpers.<WindowedValue<K>>encode());
+        Dataset<Tuple2<WindowedValue<K>, WindowedValue<KV<K, VO>>>> combined =
+            grouped.agg(agg.toColumn(EncoderHelpers.<WindowedValue<KV<K, VA>>>encode(),
+            EncoderHelpers.<WindowedValue<KV<K, VO>>>encode()));
+        context.setOutputDataset(transform, combined.map(
+            new MapFunction<Tuple2<WindowedValue<K>, WindowedValue<KV<K, VO>>>,
+                WindowedValue<KV<K, VO>>>() {
+
+          @Override
+          public WindowedValue<KV<K, VO>> call(Tuple2<WindowedValue<K>,
+              WindowedValue<KV<K, VO>>> tuple2) throws Exception {
+            return tuple2._2();
+          }
+        }, EncoderHelpers.<WindowedValue<KV<K, VO>>>encode()));
+
       }
     };
   }
@@ -821,10 +828,10 @@ public final class DatasetsTransformTranslator {
 //    EVALUATORS.put(HadoopIO.Write.Bound.class, writeHadoop());
     EVALUATORS.put(ParDo.Bound.class, parDo());
 //    EVALUATORS.put(ParDo.BoundMulti.class, multiDo());
-    EVALUATORS.put(GroupByKeyOnly.class, gbk());
+    EVALUATORS.put(GroupByKey.class, gbk());
     EVALUATORS.put(Combine.GroupedValues.class, grouped());
 //    EVALUATORS.put(Combine.Globally.class, combineGlobally());
-//    EVALUATORS.put(Combine.PerKey.class, combinePerKey());
+    EVALUATORS.put(Combine.PerKey.class, combinePerKey());
     EVALUATORS.put(Flatten.FlattenPCollectionList.class, flattenPColl());
     EVALUATORS.put(Create.Values.class, create());
     EVALUATORS.put(View.AsSingleton.class, viewAsSingleton());

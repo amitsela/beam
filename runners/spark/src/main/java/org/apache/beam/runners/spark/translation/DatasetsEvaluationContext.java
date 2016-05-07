@@ -42,6 +42,7 @@ import org.apache.beam.sdk.values.*;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Encoders;
+import org.apache.spark.sql.GroupedDataset;
 import org.apache.spark.sql.SQLContext;
 
 /**
@@ -79,6 +80,7 @@ public class DatasetsEvaluationContext implements EvaluationResult {
     private Iterable<WindowedValue<T>> windowedValues;
     private Coder<T> coder;
     private Dataset<WindowedValue<T>> dataset;
+    private GroupedDataset<?, ?> groupedDataset;
 
     DatasetHolder(Iterable<T> values, Coder<T> coder) {
       this.windowedValues =
@@ -88,6 +90,17 @@ public class DatasetsEvaluationContext implements EvaluationResult {
 
     DatasetHolder(Dataset<WindowedValue<T>> dataset) {
       this.dataset = dataset;
+    }
+
+    DatasetHolder(GroupedDataset<?, ?> groupedDataset) {
+      this.groupedDataset = groupedDataset;
+    }
+
+    GroupedDataset<?, ?> getGroupedDataset() {
+      if (groupedDataset == null) {
+        throw new IllegalArgumentException("DatasetHolder does not hold a GroupedDataset!");
+      }
+      return groupedDataset;
     }
 
     @SuppressWarnings("unchecked")
@@ -173,8 +186,15 @@ public class DatasetsEvaluationContext implements EvaluationResult {
   }
 
   protected  <T> void setOutputDataset(PTransform<?, ?> transform,
-      Dataset<WindowedValue<T>> dataset) {
+                                       Dataset<WindowedValue<T>> dataset) {
     setDataset((PValue) getOutput(transform), dataset);
+  }
+
+  protected  void setOutputGroupedDataset(PTransform<?, ?> transform,
+                                          GroupedDataset<?, ?> groupedDataset) {
+    DatasetHolder<?> datasetHolder = new DatasetHolder<>(groupedDataset);
+    pcollections.put((PValue) getOutput(transform), datasetHolder);
+    leafDatasets.add(datasetHolder);
   }
 
   protected  <T> void setOutputDatasetFromValues(PTransform<?, ?> transform, Iterable<T> values,
@@ -218,6 +238,14 @@ public class DatasetsEvaluationContext implements EvaluationResult {
 
   Dataset<?> getInputDataset(PTransform<? extends PInput, ?> transform) {
     return getDataset((PValue) getInput(transform));
+  }
+
+  GroupedDataset<?, ?> getInputGroupedDataset(PTransform<? extends PInput, ?> transform) {
+    PValue pvalue = (PValue) getInput(transform);
+    DatasetHolder<?> datasetHolder = pcollections.get(pvalue);
+    GroupedDataset<?, ?> groupedDataset = datasetHolder.getGroupedDataset();
+    leafDatasets.remove(datasetHolder);
+    return groupedDataset;
   }
 
 
