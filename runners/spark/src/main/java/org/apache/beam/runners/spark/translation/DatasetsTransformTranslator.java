@@ -282,9 +282,9 @@ public final class DatasetsTransformTranslator {
       public void evaluate(Combine.PerKey<K, VI, VO> transform, EvaluationResult ctxt) {
         DatasetsEvaluationContext context = (DatasetsEvaluationContext) ctxt;
         final Combine.KeyedCombineFn<K, VI, VA, VO> keyed = COMBINE_PERKEY_FG.get("fn", transform);
-        Aggregator<WindowedValue<KV<K, VI>>, WindowedValue<KV<K, VA>>,
-            WindowedValue<KV<K, VO>>> agg = new Aggregator<WindowedValue<KV<K, VI>>,
-            WindowedValue<KV<K, VA>>, WindowedValue<KV<K, VO>>>() {
+        Aggregator<WindowedValue<KV<K, VI>>, WindowedValue<KV<K, VA>>, WindowedValue<VO>> agg =
+            new Aggregator<WindowedValue<KV<K, VI>>,
+            WindowedValue<KV<K, VA>>, WindowedValue<VO>>() {
           @Override
           public WindowedValue<KV<K, VA>> zero() {
             return null;
@@ -318,18 +318,18 @@ public final class DatasetsTransformTranslator {
               return wkva1;
             } else {
               VA va = keyed.mergeAccumulators(wkva1.getValue().getKey(),
-                      Collections.unmodifiableList(Arrays.asList(wkva1.getValue().getValue(),
-                          wkva2.getValue().getValue())));
+                  Collections.unmodifiableList(Arrays.asList(wkva1.getValue().getValue(),
+                  wkva2.getValue().getValue())));
               return composeWkv(va, wkva1);
             }
           }
 
           @Override
-          public WindowedValue<KV<K, VO>> finish(WindowedValue<KV<K, VA>> wkva) {
+          public WindowedValue<VO> finish(WindowedValue<KV<K, VA>> wkva) {
             K key = wkva.getValue().getKey();
             VA va = wkva.getValue().getValue();
             VO vo = keyed.extractOutput(key, va);
-            return composeWkv(vo, wkva);
+            return WindowedValue.of(vo, wkva.getTimestamp(), wkva.getWindows(), wkva.getPane());
           }
         };
 
@@ -388,19 +388,22 @@ public final class DatasetsTransformTranslator {
                 return WindowedValue.of(key, wkv.getTimestamp(), wkv.getWindows(), wkv.getPane());
               }
             }, EncoderHelpers.<WindowedValue<K>>encode());
-        Dataset<Tuple2<WindowedValue<K>, WindowedValue<KV<K, VO>>>> combined =
+        Dataset<Tuple2<WindowedValue<K>, WindowedValue<VO>>> aggregated =
             grouped.agg(agg.toColumn(EncoderHelpers.<WindowedValue<KV<K, VA>>>encode(),
-            EncoderHelpers.<WindowedValue<KV<K, VO>>>encode()));
-        context.setOutputDataset(transform, combined.map(
-            new MapFunction<Tuple2<WindowedValue<K>, WindowedValue<KV<K, VO>>>,
-                WindowedValue<KV<K, VO>>>() {
+            EncoderHelpers.<WindowedValue<VO>>encode()));
+        context.setOutputDataset(transform, aggregated.map(
+                new MapFunction<Tuple2<WindowedValue<K>, WindowedValue<VO>>,
+                        WindowedValue<KV<K, VO>>>() {
 
-          @Override
-          public WindowedValue<KV<K, VO>> call(Tuple2<WindowedValue<K>,
-              WindowedValue<KV<K, VO>>> tuple2) throws Exception {
-            return tuple2._2();
-          }
-        }, EncoderHelpers.<WindowedValue<KV<K, VO>>>encode()));
+                  @Override
+                  public WindowedValue<KV<K, VO>> call(Tuple2<WindowedValue<K>,
+                          WindowedValue<VO>> tuple2) throws Exception {
+                    K key = tuple2._1().getValue();
+                    WindowedValue<VO> wvo = tuple2._2();
+                    return WindowedValue.of(KV.of(key, wvo.getValue()), wvo.getTimestamp(),
+                        wvo.getWindows(), wvo.getPane());
+                  }
+                }, EncoderHelpers.<WindowedValue<KV<K, VO>>>encode()));
 
       }
     };
