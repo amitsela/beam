@@ -111,7 +111,7 @@ public class DatasetsEvaluationContext implements EvaluationResult {
         dataset = sqlContext.createDataset(CoderHelpers.toByteArrays(windowedValues, windowCoder),
             Encoders.BINARY())
             .map(CoderHelpers.fromByteFunctionDatasets(windowCoder),
-            EncoderHelpers.<WindowedValue<T>>encode());
+            EncoderHelpers.<WindowedValue<T>>kryoEncode());
       }
       return dataset;
     }

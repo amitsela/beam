@@ -82,7 +82,7 @@ public abstract class BroadcastHelper<T> implements Serializable {
 
   /**
    * A {@link BroadcastHelper} that uses a
-   * {@link Coder} to encode values as byte arrays
+   * {@link Coder} to kryoEncode values as byte arrays
    * before broadcasting.
    * @param <T>
    */
