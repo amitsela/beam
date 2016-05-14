@@ -19,7 +19,6 @@
 package org.apache.beam.runners.spark.translation;
 
 import com.google.api.client.util.Lists;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
@@ -48,6 +47,7 @@ import org.apache.beam.sdk.transforms.windowing.GlobalWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.util.AssignWindowsDoFn;
+import org.apache.beam.sdk.util.GroupByKeyViaGroupByKeyOnly.GroupByKeyOnly;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollectionList;
@@ -62,6 +62,7 @@ import org.apache.spark.api.java.JavaRDDLike;
 import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.MapFunction;
+import org.apache.spark.api.java.function.MapGroupsFunction;
 import org.apache.spark.api.java.function.PairFunction;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Encoders;
@@ -71,6 +72,7 @@ import org.apache.spark.sql.expressions.Aggregator;
 import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -129,34 +131,37 @@ public final class DatasetsTransformTranslator {
     };
   }
 
-  private static <K, V> TransformEvaluator<GroupByKey<K, V>> gbk() {
-    return new TransformEvaluator<GroupByKey<K, V>>() {
+  private static <K, V> TransformEvaluator<GroupByKeyOnly<K, V>> gbk() {
+    return new TransformEvaluator<GroupByKeyOnly<K, V>>() {
       @Override
-      public void evaluate(GroupByKey<K, V> transform, EvaluationResult ctxt) {
+      public void evaluate(GroupByKeyOnly<K, V> transform, EvaluationResult ctxt) {
         DatasetsEvaluationContext context = (DatasetsEvaluationContext) ctxt;
         @SuppressWarnings("unchecked")
         Dataset<WindowedValue<KV<K, V>>> inDataset =
             (Dataset<WindowedValue<KV<K, V>>>) context.getInputDataset(transform);
-
-//        @SuppressWarnings("unchecked")
-//        KvCoder<K, V> coder = (KvCoder<K, V>) context.getInput(transform).getCoder();
-//        Coder<K> keyCoder = coder.getKeyCoder();
-//        final Coder<V> valueCoder = coder.getValueCoder();
-
-        //TODO: transform inDataset into Dataset<Tuple2<K as byte[],
-        // WindowedValue<KV<K, V>> as byte[]>> which will be trivial for grouping
-        // use coders for that
-
-        GroupedDataset<WindowedValue<K>, WindowedValue<KV<K, V>>> groupedDataset = inDataset
-            .groupBy(new MapFunction<WindowedValue<KV<K, V>>, WindowedValue<K>>() {
+        GroupedDataset<K, KV<K, V>> grouped = inDataset.map(WindowingHelpers.<KV<K, V>>unwindowFunctionDatasets(),
+                EncoderHelpers.<KV<K, V>>kryoEncode())
+            .groupBy(new MapFunction<KV<K,V>, K>() {
               @Override
-              public WindowedValue<K> call(WindowedValue<KV<K, V>> wkv) throws Exception {
-                return WindowedValue.of(wkv.getValue().getKey(), wkv.getTimestamp(),
-                        wkv.getWindows(), wkv.getPane());
+              public K call(KV<K, V> kv) throws Exception {
+                return kv.getKey();
               }
-            }, EncoderHelpers.<WindowedValue<K>>kryoEncode());
+            }, EncoderHelpers.<K>kryoEncode());
+        Dataset<KV<K, Iterable<V>>> materialized =
+            grouped.mapGroups(new MapGroupsFunction<K, KV<K, V>, KV<K, Iterable<V>>>() {
+          @Override
+          public KV<K, Iterable<V>> call(K key, Iterator<KV<K, V>> values) throws Exception {
+            List<V> vs = Lists.newArrayList();
+            while (values.hasNext()) {
+              vs.add(values.next().getValue());
+            }
+            return KV.of(key, Iterables.unmodifiableIterable(vs));
+          }
+        }, EncoderHelpers.<KV<K, Iterable<V>>>kryoEncode());
 
-        context.setOutputGroupedDataset(transform, groupedDataset);
+        context.setOutputDataset(transform,
+            materialized.map(WindowingHelpers.<KV<K, Iterable<V>>>windowFunctionDatasets(),
+            EncoderHelpers.<WindowedValue<KV<K, Iterable<V>>>>kryoEncode()));
       }
     };
   }
@@ -170,45 +175,12 @@ public final class DatasetsTransformTranslator {
           EvaluationResult ctxt) {
         DatasetsEvaluationContext context = (DatasetsEvaluationContext) ctxt;
         final Combine.KeyedCombineFn<K, VI, VA, VO> keyed = GROUPED_FG.get("fn", transform);
-        Aggregator<WindowedValue<KV<K, VI>>, VA, VO> agg =
-            new Aggregator<WindowedValue<KV<K, VI>>, VA, VO>() {
-              @Override
-              public VA zero() {
-                return keyed.createAccumulator(null);
-              }
-
-              @Override
-              public VA reduce(VA vb, WindowedValue<KV<K, VI>> a) {
-                return keyed.addInput(null, vb, a.getValue().getValue());
-              }
-
-              @Override
-              public VA merge(VA b1, VA b2) {
-                return keyed.mergeAccumulators(null, ImmutableList.of(b1, b2));
-              }
-
-              @Override
-              public VO finish(VA reduction) {
-                return keyed.extractOutput(null, reduction);
-              }
-            };
         @SuppressWarnings("unchecked")
-        GroupedDataset<WindowedValue<K>, WindowedValue<KV<K, VI>>> groupedDataset =
-            (GroupedDataset<WindowedValue<K>, WindowedValue<KV<K, VI>>>)
-            context.getInputGroupedDataset(transform);
-        Dataset<WindowedValue<KV<K, VO>>> outDataset =
-            groupedDataset.agg(agg.toColumn(EncoderHelpers.<VA>kryoEncode(),
-            EncoderHelpers.<VO>kryoEncode()))
-            .map(new MapFunction<Tuple2<WindowedValue<K>, VO>, WindowedValue<KV<K, VO>>>() {
-              @Override
-              public WindowedValue<KV<K, VO>> call(Tuple2<WindowedValue<K>, VO> tuple2) throws
-                      Exception {
-                WindowedValue<K> wk = tuple2._1();
-                return WindowedValue.of(KV.of(wk.getValue(), tuple2._2()), wk.getTimestamp(),
-                    wk.getWindows(), wk.getPane());
-              }
-            }, EncoderHelpers.<WindowedValue<KV<K, VO>>>kryoEncode());
-        context.setOutputDataset(transform, outDataset);
+        Dataset<WindowedValue<KV<K, Iterable<VI>>>> inDataset =
+            (Dataset<WindowedValue<KV<K, Iterable<VI>>>>) context.getInputDataset(transform);
+        context.setOutputDataset(transform,
+            inDataset.map(new KVFunction<>(keyed),
+            EncoderHelpers.<WindowedValue<KV<K, VO>>>kryoEncode()));
       }
     };
   }
@@ -868,7 +840,7 @@ public final class DatasetsTransformTranslator {
 //    EVALUATORS.put(HadoopIO.Write.Bound.class, writeHadoop());
     EVALUATORS.put(ParDo.Bound.class, parDo());
 //    EVALUATORS.put(ParDo.BoundMulti.class, multiDo());
-    EVALUATORS.put(GroupByKey.class, gbk());
+    EVALUATORS.put(GroupByKeyOnly.class, gbk());
     EVALUATORS.put(Combine.GroupedValues.class, grouped());
 //    EVALUATORS.put(Combine.Globally.class, combineGlobally());
     EVALUATORS.put(Combine.PerKey.class, combinePerKey());
