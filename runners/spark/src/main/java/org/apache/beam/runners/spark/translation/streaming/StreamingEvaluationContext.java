@@ -180,11 +180,11 @@ public class StreamingEvaluationContext extends BatchEvaluationContext {
 
   //---------------- override in order to expose in package
   @Override
-  protected <InputT extends PInput> InputT getInput(PTransform<InputT, ?> transform) {
+  public <InputT extends PInput> InputT getInput(PTransform<InputT, ?> transform) {
     return super.getInput(transform);
   }
   @Override
-  protected <OutputT extends POutput> OutputT getOutput(PTransform<?, OutputT> transform) {
+  public <OutputT extends POutput> OutputT getOutput(PTransform<?, OutputT> transform) {
     return super.getOutput(transform);
   }
 

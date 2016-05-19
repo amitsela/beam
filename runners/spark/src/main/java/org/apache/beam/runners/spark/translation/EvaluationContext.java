@@ -19,16 +19,26 @@
 package org.apache.beam.runners.spark.translation;
 
 import org.apache.beam.runners.spark.EvaluationResult;
+import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.transforms.AppliedPTransform;
+import org.apache.beam.sdk.transforms.PTransform;
+import org.apache.beam.sdk.values.PInput;
+import org.apache.beam.sdk.values.POutput;
 
 /**
  * A general evaluation context interface.
  */
 public interface EvaluationContext extends EvaluationResult {
 
+  Pipeline getPipeline();
+
   void setCurrentTransform(AppliedPTransform<?, ?, ?> transform);
 
   AppliedPTransform<?, ?, ?> getCurrentTransform();
+
+  <T extends PInput> T getInput(PTransform<T, ?> transform);
+
+  <T extends POutput> T getOutput(PTransform<?, T> transform);
 
   void computeOutputs();
 }

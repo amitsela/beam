@@ -136,7 +136,7 @@ public class BatchEvaluationContext implements EvaluationContext {
     return jsc;
   }
 
-  protected Pipeline getPipeline() {
+  public Pipeline getPipeline() {
     return pipeline;
   }
 
@@ -152,7 +152,7 @@ public class BatchEvaluationContext implements EvaluationContext {
     return currentTransform;
   }
 
-  protected <T extends PInput> T getInput(PTransform<T, ?> transform) {
+  public <T extends PInput> T getInput(PTransform<T, ?> transform) {
     checkArgument(currentTransform != null && currentTransform.getTransform() == transform,
         "can only be called with current transform");
     @SuppressWarnings("unchecked")
@@ -160,7 +160,7 @@ public class BatchEvaluationContext implements EvaluationContext {
     return input;
   }
 
-  protected <T extends POutput> T getOutput(PTransform<?, T> transform) {
+  public <T extends POutput> T getOutput(PTransform<?, T> transform) {
     checkArgument(currentTransform != null && currentTransform.getTransform() == transform,
         "can only be called with current transform");
     @SuppressWarnings("unchecked")
