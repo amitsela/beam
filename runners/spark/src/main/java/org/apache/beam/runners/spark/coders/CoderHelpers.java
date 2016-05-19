@@ -24,6 +24,7 @@ import org.apache.beam.sdk.coders.Coder;
 import com.google.common.collect.Iterables;
 
 import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.MapFunction;
 import org.apache.spark.api.java.function.PairFunction;
 
 import java.io.ByteArrayInputStream;
@@ -76,7 +77,7 @@ public final class CoderHelpers {
   }
 
   /**
-   * Utility method for deserializing a byte array using the specified coder.
+   * Utility method for deserializing a Iterable of byte arrays using the specified coder.
    *
    * @param serialized bytearray to be deserialized.
    * @param coder      Coder to deserialize with.
@@ -90,6 +91,22 @@ public final class CoderHelpers {
     } catch (IOException e) {
       throw new IllegalStateException("Error decoding bytes for coder: " + coder, e);
     }
+  }
+
+  /**
+   * Utility method for deserializing a byte array using the specified coder.
+   *
+   * @param values Values to deserialize.
+   * @param coder  Coder to deserialize with.
+   * @param <T>    Type of object to be returned.
+   * @return List of deserialized objects.
+   */
+  public static <T> List<T> fromByteArrays(Iterable<byte[]> values, Coder<T> coder) {
+    List<T> res = new LinkedList<>();
+    for (byte[] value: values) {
+      res.add(fromByteArray(value, coder));
+    }
+    return res;
   }
 
   /**
@@ -108,6 +125,16 @@ public final class CoderHelpers {
     };
   }
 
+  // For Datasets API
+  public static <T> MapFunction<T, byte[]> toByteFunctionD(final Coder<T> coder) {
+    return new MapFunction<T, byte[]>() {
+      @Override
+      public byte[] call(T t) throws Exception {
+        return toByteArray(t, coder);
+      }
+    };
+  }
+
   /**
    * A function wrapper for converting a byte array to an object.
    *
@@ -117,6 +144,16 @@ public final class CoderHelpers {
    */
   public static <T> Function<byte[], T> fromByteFunction(final Coder<T> coder) {
     return new Function<byte[], T>() {
+      @Override
+      public T call(byte[] bytes) throws Exception {
+        return fromByteArray(bytes, coder);
+      }
+    };
+  }
+
+  // For Datasets API
+  public static <T> MapFunction<byte[], T> fromByteFunctionD(final Coder<T> coder) {
+    return new MapFunction<byte[], T>() {
       @Override
       public T call(byte[] bytes) throws Exception {
         return fromByteArray(bytes, coder);
