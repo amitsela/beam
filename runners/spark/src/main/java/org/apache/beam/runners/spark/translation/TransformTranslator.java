@@ -124,7 +124,7 @@ public final class TransformTranslator {
       @SuppressWarnings("unchecked")
       @Override
       public void evaluate(Flatten.FlattenPCollectionList<T> transform, EvaluationContext context) {
-        PCollectionList<T> pcs = ((BatchEvaluationContext) context).getInput(transform);
+        PCollectionList<T> pcs = context.getInput(transform);
         JavaRDD<WindowedValue<T>>[] rdds = new JavaRDD[pcs.size()];
         for (int i = 0; i < rdds.length; i++) {
           rdds[i] = (JavaRDD<WindowedValue<T>>) ((BatchEvaluationContext) context)
@@ -146,8 +146,7 @@ public final class TransformTranslator {
             (JavaRDDLike<WindowedValue<KV<K, V>>, ?>) ((BatchEvaluationContext) context)
             .getInputRDD(transform);
         @SuppressWarnings("unchecked")
-        KvCoder<K, V> coder = (KvCoder<K, V>) ((BatchEvaluationContext) context)
-            .getInput(transform).getCoder();
+        KvCoder<K, V> coder = (KvCoder<K, V>) context.getInput(transform).getCoder();
         Coder<K> keyCoder = coder.getKeyCoder();
         Coder<V> valueCoder = coder.getValueCoder();
 
@@ -200,12 +199,10 @@ public final class TransformTranslator {
             (JavaRDDLike<WindowedValue<InputT>, ?>) ((BatchEvaluationContext) context)
             .getInputRDD(transform);
 
-        final Coder<InputT> iCoder = ((BatchEvaluationContext) context)
-            .getInput(transform).getCoder();
+        final Coder<InputT> iCoder = context.getInput(transform).getCoder();
         final Coder<AccumT> aCoder;
         try {
-          aCoder = globally.getAccumulatorCoder(
-                  ((BatchEvaluationContext) context).getPipeline().getCoderRegistry(), iCoder);
+          aCoder = globally.getAccumulatorCoder(context.getPipeline().getCoderRegistry(), iCoder);
         } catch (CannotProvideCoderException e) {
           throw new IllegalStateException("Could not determine coder for accumulator", e);
         }
@@ -242,7 +239,7 @@ public final class TransformTranslator {
         );
         OutputT output = globally.extractOutput(CoderHelpers.fromByteArray(acc, aCoder));
 
-        Coder<OutputT> coder = ((BatchEvaluationContext) context).getOutput(transform).getCoder();
+        Coder<OutputT> coder = context.getOutput(transform).getCoder();
         JavaRDD<byte[]> outRdd = ((BatchEvaluationContext) context).getSparkContext().parallelize(
             // don't use Guava's ImmutableList.of as output may be null
             CoderHelpers.toByteArrays(Collections.singleton(output), coder));
@@ -268,14 +265,12 @@ public final class TransformTranslator {
             .getInputRDD(transform);
 
         @SuppressWarnings("unchecked")
-        KvCoder<K, InputT> inputCoder = (KvCoder<K, InputT>)
-            ((BatchEvaluationContext) context).getInput(transform).getCoder();
+        KvCoder<K, InputT> inputCoder = (KvCoder<K, InputT>) context.getInput(transform).getCoder();
         Coder<K> keyCoder = inputCoder.getKeyCoder();
         Coder<InputT> viCoder = inputCoder.getValueCoder();
         Coder<AccumT> vaCoder;
         try {
-          vaCoder = keyed.getAccumulatorCoder(
-              ((BatchEvaluationContext) context).getPipeline()
+          vaCoder = keyed.getAccumulatorCoder(context.getPipeline()
               .getCoderRegistry(), keyCoder, viCoder);
         } catch (CannotProvideCoderException e) {
           throw new IllegalStateException("Could not determine coder for accumulator", e);
@@ -313,16 +308,13 @@ public final class TransformTranslator {
         //-- windowed coders
         final WindowedValue.FullWindowedValueCoder<K> wkCoder =
                 WindowedValue.FullWindowedValueCoder.of(keyCoder,
-                ((BatchEvaluationContext) context).getInput(transform).getWindowingStrategy()
-                .getWindowFn().windowCoder());
+                context.getInput(transform).getWindowingStrategy().getWindowFn().windowCoder());
         final WindowedValue.FullWindowedValueCoder<KV<K, InputT>> wkviCoder =
                 WindowedValue.FullWindowedValueCoder.of(kviCoder,
-                ((BatchEvaluationContext) context).getInput(transform).getWindowingStrategy()
-                .getWindowFn().windowCoder());
+                context.getInput(transform).getWindowingStrategy().getWindowFn().windowCoder());
         final WindowedValue.FullWindowedValueCoder<KV<K, AccumT>> wkvaCoder =
                 WindowedValue.FullWindowedValueCoder.of(kvaCoder,
-                ((BatchEvaluationContext) context).getInput(transform).getWindowingStrategy()
-                .getWindowFn().windowCoder());
+                context.getInput(transform).getWindowingStrategy().getWindowFn().windowCoder());
 
         // Use coders to convert objects in the PCollection to byte arrays, so they
         // can be transferred over the network for the shuffle.
@@ -488,7 +480,7 @@ public final class TransformTranslator {
             .mapPartitionsToPair(multifn)
             .cache();
 
-        PCollectionTuple pct = ((BatchEvaluationContext) context).getOutput(transform);
+        PCollectionTuple pct = context.getOutput(transform);
         for (Map.Entry<TupleTag<?>, PCollection<?>> e : pct.getAll().entrySet()) {
           @SuppressWarnings("unchecked")
           JavaPairRDD<TupleTag<?>, WindowedValue<?>> filtered =
@@ -735,7 +727,7 @@ public final class TransformTranslator {
         Iterable<T> elems = transform.getElements();
         // Use a coder to convert the objects in the PCollection to byte arrays, so they
         // can be transferred over the network.
-        Coder<T> coder = ((BatchEvaluationContext) context).getOutput(transform).getCoder();
+        Coder<T> coder = context.getOutput(transform).getCoder();
         ((BatchEvaluationContext) context).setOutputRDDFromValues(transform, elems, coder);
       }
     };
@@ -747,9 +739,9 @@ public final class TransformTranslator {
       public void evaluate(View.AsSingleton<T> transform, EvaluationContext context) {
         Iterable<? extends WindowedValue<?>> iter =
             ((BatchEvaluationContext) context)
-            .getWindowedValues(((BatchEvaluationContext) context).getInput(transform));
+            .getWindowedValues(context.getInput(transform));
         ((BatchEvaluationContext) context)
-            .setPView(((BatchEvaluationContext) context).getOutput(transform), iter);
+            .setPView(context.getOutput(transform), iter);
       }
     };
   }
@@ -759,10 +751,8 @@ public final class TransformTranslator {
       @Override
       public void evaluate(View.AsIterable<T> transform, EvaluationContext context) {
         Iterable<? extends WindowedValue<?>> iter =
-            ((BatchEvaluationContext) context)
-            .getWindowedValues(((BatchEvaluationContext) context).getInput(transform));
-        ((BatchEvaluationContext) context)
-            .setPView(((BatchEvaluationContext) context).getOutput(transform), iter);
+            ((BatchEvaluationContext) context).getWindowedValues(context.getInput(transform));
+        ((BatchEvaluationContext) context).setPView(context.getOutput(transform), iter);
       }
     };
   }
@@ -775,9 +765,8 @@ public final class TransformTranslator {
                            EvaluationContext context) {
         Iterable<? extends WindowedValue<?>> iter =
             ((BatchEvaluationContext) context)
-            .getWindowedValues(((BatchEvaluationContext) context).getInput(transform));
-        ((BatchEvaluationContext) context).setPView(((BatchEvaluationContext) context)
-            .getOutput(transform), iter);
+            .getWindowedValues(context.getInput(transform));
+        ((BatchEvaluationContext) context).setPView(context.getOutput(transform), iter);
       }
     };
   }
