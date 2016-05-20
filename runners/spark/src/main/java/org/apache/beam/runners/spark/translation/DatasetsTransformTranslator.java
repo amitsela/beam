@@ -24,7 +24,6 @@ import com.google.common.collect.Maps;
 
 import com.clearspring.analytics.util.Lists;
 
-import org.apache.beam.runners.spark.EvaluationResult;
 import org.apache.beam.runners.spark.coders.CoderHelpers;
 import org.apache.beam.runners.spark.coders.EncoderHelpers;
 import org.apache.beam.runners.spark.util.BroadcastHelper;
@@ -37,6 +36,7 @@ import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.Flatten;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.View;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.transforms.windowing.WindowFn;
@@ -201,12 +201,24 @@ public class DatasetsTransformTranslator {
 
         // Use a coder to convert the objects in the PCollection to byte arrays, so they
         // can be transferred over the network.
-        Coder<T> coder = context.getOutput(transform).getCoder();
+        Coder<T> coder = dContext.getOutput(transform).getCoder();
         dContext.setOutputDatasetFromValues(transform, transform.getElements(), coder);
       }
     };
   }
 
+  private static TransformEvaluator<PTransform<?, ?>> view() {
+    return new TransformEvaluator<PTransform<?, ?>>() {
+
+      @Override
+      public void evaluate(PTransform<?, ?> transform, EvaluationContext context) {
+        DatasetsEvaluationContext dContext = (DatasetsEvaluationContext) context;
+        Iterable<? extends WindowedValue<?>> iter =
+                dContext.getWindowedValues((PCollection<?>) dContext.getInput(transform));
+        dContext.setPView((PCollectionView<?>) dContext.getOutput(transform), iter);
+      }
+    };
+  }
   private static final Map<Class<? extends PTransform>, TransformEvaluator<?>>
       PRIMITIVES = Maps.newHashMap();
 
@@ -224,9 +236,9 @@ public class DatasetsTransformTranslator {
 
     //-------- Composites
     EVALUATORS.put(Create.Values.class, createValues());
-//    EVALUATORS.put(View.AsSingleton.class, viewAsSingleton());
-//    EVALUATORS.put(View.AsIterable.class, viewAsIter());
-//    EVALUATORS.put(View.CreatePCollectionView.class, createPCollView());
+    EVALUATORS.put(View.AsSingleton.class, view());
+    EVALUATORS.put(View.AsIterable.class, view());
+    EVALUATORS.put(View.CreatePCollectionView.class, view());
 //    EVALUATORS.put(Combine.GroupedValues.class, combineGrouped());
 //    EVALUATORS.put(Combine.Globally.class, combineGlobally());
 //    EVALUATORS.put(Combine.PerKey.class, combinePerKey());
