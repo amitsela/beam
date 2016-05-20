@@ -21,6 +21,8 @@ package org.apache.beam.runners.spark.coders;
 import org.apache.spark.sql.Encoder;
 import org.apache.spark.sql.Encoders;
 
+import scala.Tuple2;
+
 /**
  * {@link org.apache.spark.sql.Encoders} utility class.
  */
@@ -29,5 +31,9 @@ public class EncoderHelpers {
   @SuppressWarnings("unchecked")
   public static <T> Encoder<T> kryo() {
     return Encoders.kryo((Class<T>) Object.class);
+  }
+
+  public static <T1, T2> Encoder<Tuple2<T1, T2>> tuple2Encoder() {
+    return Encoders.tuple(EncoderHelpers.<T1>kryo(), EncoderHelpers.<T2>kryo());
   }
 }
