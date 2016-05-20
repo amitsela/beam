@@ -134,7 +134,7 @@ public class DatasetsEvaluationContext implements EvaluationContext {
     return jsc;
   }
 
-  public SQLContext getSqc() {
+  public SQLContext getSQLContext() {
     return sqc;
   }
 
