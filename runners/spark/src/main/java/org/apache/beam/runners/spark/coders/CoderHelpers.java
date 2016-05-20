@@ -181,6 +181,18 @@ public final class CoderHelpers {
     };
   }
 
+  // For Datasets API
+  public static <K, V> MapFunction<Tuple2<K, V>, Tuple2<ByteArray, byte[]>> toByteFunctionD(
+      final Coder<K> keyCoder, final Coder<V> valueCoder) {
+    return new MapFunction<Tuple2<K, V>, Tuple2<ByteArray, byte[]>>() {
+      @Override
+      public Tuple2<ByteArray, byte[]> call(Tuple2<K, V> kv) {
+        return new Tuple2<>(new ByteArray(toByteArray(kv._1(), keyCoder)), toByteArray(kv._2(),
+            valueCoder));
+      }
+    };
+  }
+
   /**
    * A function wrapper for converting a byte array pair to a key-value pair.
    *
@@ -217,12 +229,29 @@ public final class CoderHelpers {
       @Override
       public Tuple2<K, Iterable<V>> call(Tuple2<ByteArray, Iterable<byte[]>> tuple) {
         return new Tuple2<>(fromByteArray(tuple._1().getValue(), keyCoder),
-          Iterables.transform(tuple._2(), new com.google.common.base.Function<byte[], V>() {
-            @Override
-            public V apply(byte[] bytes) {
-              return fromByteArray(bytes, valueCoder);
-            }
-          }));
+            Iterables.transform(tuple._2(), new com.google.common.base.Function<byte[], V>() {
+              @Override
+              public V apply(byte[] bytes) {
+                return fromByteArray(bytes, valueCoder);
+              }
+            }));
+      }
+    };
+  }
+
+  // For Datasets API
+  public static <K, V> MapFunction<Tuple2<ByteArray, Iterable<byte[]>>, Tuple2<K, Iterable<V>>>
+      fromByteFunctionIterableD(final Coder<K> keyCoder, final Coder<V> valueCoder) {
+    return new MapFunction<Tuple2<ByteArray, Iterable<byte[]>>, Tuple2<K, Iterable<V>>>() {
+      @Override
+      public Tuple2<K, Iterable<V>> call(Tuple2<ByteArray, Iterable<byte[]>> tuple) {
+        return new Tuple2<>(fromByteArray(tuple._1().getValue(), keyCoder),
+            Iterables.transform(tuple._2(), new com.google.common.base.Function<byte[], V>() {
+              @Override
+              public V apply(byte[] bytes) {
+                return fromByteArray(bytes, valueCoder);
+              }
+            }));
       }
     };
   }
