@@ -523,7 +523,14 @@ public final class TransformTranslator {
             new ShardTemplateInformation(transform.getNumShards(),
                 transform.getShardTemplate(), transform.getFilenamePrefix(),
                 transform.getFilenameSuffix());
-        writeHadoopFile(last, new Configuration(), shardTemplateInfo, Text.class,
+
+        Configuration conf = new Configuration();
+        if (transform.getFilenamePrefix().startsWith("gs")) {
+          conf.set("fs.gs.impl", "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem");
+          conf.set("fs.AbstractFileSystem.gs.impl",
+              "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS");
+        }
+        writeHadoopFile(last, conf, shardTemplateInfo, Text.class,
             NullWritable.class, TemplatedTextOutputFormat.class);
       }
     };

@@ -38,6 +38,7 @@ import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.util.GroupByKeyViaGroupByKeyOnly;
+import org.apache.beam.sdk.util.IOChannelUtils;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
@@ -109,6 +110,9 @@ public final class SparkRunner extends PipelineRunner<EvaluationResult> {
    * @return A pipeline runner that will execute with specified options.
    */
   public static SparkRunner fromOptions(PipelineOptions options) {
+    // (Re-)register standard IO factories. Clobbers any prior credentials.
+    IOChannelUtils.registerStandardIOFactories(options);
+
     SparkPipelineOptions sparkOptions =
         PipelineOptionsValidator.validate(SparkPipelineOptions.class, options);
     return new SparkRunner(sparkOptions);
