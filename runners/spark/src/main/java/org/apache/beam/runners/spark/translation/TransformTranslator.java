@@ -25,6 +25,7 @@ import static org.apache.beam.runners.spark.io.hadoop.ShardNameBuilder.getOutput
 import static org.apache.beam.runners.spark.io.hadoop.ShardNameBuilder.replaceShardCount;
 
 import org.apache.beam.runners.spark.coders.CoderHelpers;
+import org.apache.beam.runners.spark.io.SparkSource;
 import org.apache.beam.runners.spark.io.hadoop.HadoopIO;
 import org.apache.beam.runners.spark.io.hadoop.ShardNameTemplateHelper;
 import org.apache.beam.runners.spark.io.hadoop.TemplatedAvroKeyOutputFormat;
@@ -36,6 +37,8 @@ import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.IterableCoder;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.io.AvroIO;
+import org.apache.beam.sdk.io.BoundedSource;
+import org.apache.beam.sdk.io.Read;
 import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.Create;
@@ -551,6 +554,21 @@ public final class TransformTranslator {
     };
   }
 
+  private static <T> TransformEvaluator<Read.Bounded<T>> readBounded() {
+    return new TransformEvaluator<Read.Bounded<T>>() {
+      @Override
+      public void evaluate(Read.Bounded<T> transform, EvaluationContext context) {
+        BoundedSource<T> boundedSource = transform.getSource();
+        JavaRDD<WindowedValue<T>> input = new JavaRDD<>(
+            new SparkSource.SourceRDD<>(context.getSparkContext().sc(), boundedSource,
+                context.getRuntimeContext()),
+                    scala.reflect.ClassTag$.MODULE$.<WindowedValue<T>>apply(WindowedValue.class));
+        // cache to avoid re-evaluation of the source by Spark's lazy DAG evaluation.
+        input.cache();
+        context.setOutputRDD(transform, input);
+      }
+    };
+  }
 
   private static <T> TransformEvaluator<TextIO.Read.Bound<T>> readText() {
     return new TransformEvaluator<TextIO.Read.Bound<T>>() {
@@ -866,6 +884,7 @@ public final class TransformTranslator {
       .newHashMap();
 
   static {
+    EVALUATORS.put(Read.Bounded.class, readBounded());
     EVALUATORS.put(TextIO.Read.Bound.class, readText());
     EVALUATORS.put(TextIO.Write.Bound.class, writeText());
     EVALUATORS.put(AvroIO.Read.Bound.class, readAvro());
@@ -880,7 +899,7 @@ public final class TransformTranslator {
     EVALUATORS.put(Combine.Globally.class, combineGlobally());
     EVALUATORS.put(Combine.PerKey.class, combinePerKey());
     EVALUATORS.put(Flatten.FlattenPCollectionList.class, flattenPColl());
-    EVALUATORS.put(Create.Values.class, create());
+    EVALUATORS.put(Create.Values.class, creagte());
     EVALUATORS.put(View.AsSingleton.class, viewAsSingleton());
     EVALUATORS.put(View.AsIterable.class, viewAsIter());
     EVALUATORS.put(View.CreatePCollectionView.class, createPCollView());
