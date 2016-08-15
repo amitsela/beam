@@ -885,10 +885,10 @@ public final class TransformTranslator {
 
   static {
     EVALUATORS.put(Read.Bounded.class, readBounded());
-    EVALUATORS.put(TextIO.Read.Bound.class, readText());
-    EVALUATORS.put(TextIO.Write.Bound.class, writeText());
-    EVALUATORS.put(AvroIO.Read.Bound.class, readAvro());
-    EVALUATORS.put(AvroIO.Write.Bound.class, writeAvro());
+//    EVALUATORS.put(TextIO.Read.Bound.class, readText());
+//    EVALUATORS.put(TextIO.Write.Bound.class, writeText());
+//    EVALUATORS.put(AvroIO.Read.Bound.class, readAvro());
+//    EVALUATORS.put(AvroIO.Write.Bound.class, writeAvro());
     EVALUATORS.put(HadoopIO.Read.Bound.class, readHadoop());
     EVALUATORS.put(HadoopIO.Write.Bound.class, writeHadoop());
     EVALUATORS.put(ParDo.Bound.class, parDo());
