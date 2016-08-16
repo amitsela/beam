@@ -30,6 +30,8 @@ import org.apache.spark.Partition;
 import org.apache.spark.SparkContext;
 import org.apache.spark.TaskContext;
 import org.apache.spark.rdd.RDD;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.Iterator;
@@ -48,6 +50,7 @@ public class SparkSource {
    * org.apache.beam.sdk.io.TextIO} or even {@link org.apache.beam.sdk.transforms.Create.Values}.
    */
   public static class SourceRDD<T> extends RDD<WindowedValue<T>> {
+    private static final Logger LOG = LoggerFactory.getLogger(SourceRDD.class);
 
     private final BoundedSource<T> boundedSource;
     private final SparkRuntimeContext runtimeContext;
@@ -71,12 +74,18 @@ public class SparkSource {
       this.numPartitions = sc.defaultParallelism();
     }
 
+    private static final long DEFAULT_BUNDLE_SIZE = 64 * 1024 * 1024;
     @Override
     public Partition[] getPartitions() {
+      long desiredSizeBytes = DEFAULT_BUNDLE_SIZE;
       try {
-        long desiredSizeBytes = boundedSource.getEstimatedSizeBytes(
+        desiredSizeBytes = boundedSource.getEstimatedSizeBytes(
             runtimeContext.getPipelineOptions()) / numPartitions;
-
+      } catch (Exception e) {
+        LOG.warn("Failed to get estimated size of bundle, default is " + DEFAULT_BUNDLE_SIZE
+            + " bytes.");
+      }
+      try {
         List<? extends Source<T>> partitionedSources =
             boundedSource.splitIntoBundles(desiredSizeBytes, runtimeContext.getPipelineOptions());
         Partition[] partitions = new SourcePartition[partitionedSources.size()];
