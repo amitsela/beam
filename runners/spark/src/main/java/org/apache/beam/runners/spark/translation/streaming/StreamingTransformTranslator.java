@@ -17,17 +17,21 @@
  */
 package org.apache.beam.runners.spark.translation.streaming;
 
+import org.apache.beam.runners.spark.SparkPipelineOptions;
 import org.apache.beam.runners.spark.io.ConsoleIO;
 import org.apache.beam.runners.spark.io.CreateStream;
-import org.apache.beam.runners.spark.io.KafkaIO;
+import org.apache.beam.runners.spark.io.SerializableConfigurationCoder;
+import org.apache.beam.runners.spark.io.SparkSource;
 import org.apache.beam.runners.spark.io.hadoop.HadoopIO;
 import org.apache.beam.runners.spark.translation.DoFnFunction;
 import org.apache.beam.runners.spark.translation.EvaluationContext;
 import org.apache.beam.runners.spark.translation.SparkPipelineTranslator;
 import org.apache.beam.runners.spark.translation.TransformEvaluator;
 import org.apache.beam.runners.spark.translation.WindowingHelpers;
+import org.apache.beam.runners.spark.util.BroadcastHelper;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.io.AvroIO;
+import org.apache.beam.sdk.io.Read;
 import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.transforms.AppliedPTransform;
 import org.apache.beam.sdk.transforms.Create;
@@ -40,7 +44,6 @@ import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.util.AssignWindowsDoFn;
 import org.apache.beam.sdk.util.WindowedValue;
-import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollectionList;
 import org.apache.beam.sdk.values.PDone;
 
@@ -49,6 +52,9 @@ import com.google.api.client.util.Maps;
 import com.google.api.client.util.Sets;
 import com.google.common.reflect.TypeToken;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.VoidFunction;
@@ -56,20 +62,20 @@ import org.apache.spark.streaming.Duration;
 import org.apache.spark.streaming.Durations;
 import org.apache.spark.streaming.api.java.JavaDStream;
 import org.apache.spark.streaming.api.java.JavaDStreamLike;
-import org.apache.spark.streaming.api.java.JavaPairInputDStream;
-import org.apache.spark.streaming.api.java.JavaStreamingContext;
-import org.apache.spark.streaming.kafka.KafkaUtils;
+import org.apache.spark.streaming.dstream.InputDStream;
+import org.apache.spark.streaming.scheduler.RateController;
+import org.apache.spark.util.SerializableConfiguration;
 
+import java.io.IOException;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import kafka.serializer.Decoder;
 import scala.Tuple2;
-
 
 /**
  * Supports translation between a DataFlow transform, and Spark's operations on DStreams.
@@ -88,32 +94,6 @@ public final class StreamingTransformTranslator {
             (JavaDStreamLike<WindowedValue<T>, ?, JavaRDD<WindowedValue<T>>>)
             ((StreamingEvaluationContext) context).getStream(transform);
         dstream.map(WindowingHelpers.<T>unwindowFunction()).print(transform.getNum());
-      }
-    };
-  }
-
-  private static <K, V> TransformEvaluator<KafkaIO.Read.Unbound<K, V>> kafka() {
-    return new TransformEvaluator<KafkaIO.Read.Unbound<K, V>>() {
-      @Override
-      public void evaluate(KafkaIO.Read.Unbound<K, V> transform, EvaluationContext context) {
-        StreamingEvaluationContext sec = (StreamingEvaluationContext) context;
-        JavaStreamingContext jssc = sec.getStreamingContext();
-        Class<K> keyClazz = transform.getKeyClass();
-        Class<V> valueClazz = transform.getValueClass();
-        Class<? extends Decoder<K>> keyDecoderClazz = transform.getKeyDecoderClass();
-        Class<? extends Decoder<V>> valueDecoderClazz = transform.getValueDecoderClass();
-        Map<String, String> kafkaParams = transform.getKafkaParams();
-        Set<String> topics = transform.getTopics();
-        JavaPairInputDStream<K, V> inputPairStream = KafkaUtils.createDirectStream(jssc, keyClazz,
-                valueClazz, keyDecoderClazz, valueDecoderClazz, kafkaParams, topics);
-        JavaDStream<WindowedValue<KV<K, V>>> inputStream =
-            inputPairStream.map(new Function<Tuple2<K, V>, KV<K, V>>() {
-          @Override
-          public KV<K, V> call(Tuple2<K, V> t2) throws Exception {
-            return KV.of(t2._1(), t2._2());
-          }
-        }).map(WindowingHelpers.<KV<K, V>>windowFunction());
-        sec.setStream(transform, inputStream);
       }
     };
   }
@@ -321,6 +301,45 @@ public final class StreamingTransformTranslator {
     };
   }
 
+  private static <T> TransformEvaluator<Read.Unbounded<T>> readUnbounded() {
+    return new TransformEvaluator<Read.Unbounded<T>>() {
+      @Override
+      public void evaluate(Read.Unbounded<T> transform, EvaluationContext context) {
+        StreamingEvaluationContext sec = (StreamingEvaluationContext) context;
+        Configuration conf = sec.getStreamingContext().sparkContext().hadoopConfiguration();
+        BroadcastHelper<SerializableConfiguration> broadcastedConf =
+            BroadcastHelper.create(new SerializableConfiguration(conf),
+                SerializableConfigurationCoder.of());
+        broadcastedConf.broadcast(sec.getSparkContext());
+        //TODO: clean this up
+        String checkpointDirectory = "file:/tmp/" + sec.getRuntimeContext()
+            .getPipelineOptions().as(SparkPipelineOptions.class).getAppName();
+
+        Path path = new Path(checkpointDirectory);
+        try {
+          FileSystem fs = path.getFileSystem(conf);
+          if (!fs.exists(path)) {
+            System.out.println("Creating checkpoint dir at: " + path);
+            fs.mkdirs(path);
+          } else {
+            //TODO: lookup the one-before-last checkpoint dir.
+            System.out.println("Starting from checkpoint dir " + path);
+          }
+        } catch (IOException e) {
+          e.printStackTrace();
+        }
+
+        boolean bp = RateController.isBackPressureEnabled(sec.getSparkContext().getConf());
+        InputDStream<WindowedValue<T>> inputDStream = new SparkSource.SourceDStream<>(
+            sec.getStreamingContext().ssc(), transform.getSource(), sec.getRuntimeContext(),
+                checkpointDirectory, broadcastedConf, bp);
+        JavaDStream<WindowedValue<T>> dStream = new JavaDStream<>(inputDStream,
+            scala.reflect.ClassTag$.MODULE$.<WindowedValue<T>>apply(WindowedValue.class));
+        sec.setStream(transform, dStream);
+      }
+    };
+  }
+
   private static final Map<Class<? extends PTransform>, TransformEvaluator<?>> EVALUATORS = Maps
       .newHashMap();
 
@@ -328,7 +347,7 @@ public final class StreamingTransformTranslator {
     EVALUATORS.put(ConsoleIO.Write.Unbound.class, print());
     EVALUATORS.put(CreateStream.QueuedValues.class, createFromQueue());
     EVALUATORS.put(Create.Values.class, create());
-    EVALUATORS.put(KafkaIO.Read.Unbound.class, kafka());
+    EVALUATORS.put(Read.Unbounded.class, readUnbounded());
     EVALUATORS.put(Window.Bound.class, window());
     EVALUATORS.put(Flatten.FlattenPCollectionList.class, flattenPColl());
   }
@@ -353,13 +372,13 @@ public final class StreamingTransformTranslator {
         (TransformEvaluator<TransformT>) EVALUATORS.get(clazz);
     if (transform == null) {
       if (UNSUPPORTED_EVALUATORS.contains(clazz)) {
-        throw new UnsupportedOperationException("Dataflow transformation " + clazz
+        throw new UnsupportedOperationException("Beam transformation " + clazz
           .getCanonicalName()
           + " is currently unsupported by the Spark streaming pipeline");
       }
       // DStream transformations will transform an RDD into another RDD
       // Actions will create output
-      // In Dataflow it depends on the PTransform's Input and Output class
+      // In Beam it depends on the PTransform's Input and Output class
       Class<?> pTOutputClazz = getPTransformOutputClazz(clazz);
       if (PDone.class.equals(pTOutputClazz)) {
         return foreachRDD(rddTranslator);

@@ -36,7 +36,6 @@
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <spark.version>1.6.2</spark.version>
     <hadoop.version>2.2.0</hadoop.version>
-    <kafka.version>0.8.2.1</kafka.version>
   </properties>
 
   <profiles>
@@ -106,30 +105,30 @@
       <version>${spark.version}</version>
       <scope>provided</scope>
     </dependency>
-    <dependency>
-      <groupId>org.apache.spark</groupId>
-      <artifactId>spark-streaming-kafka_2.10</artifactId>
-      <version>${spark.version}</version>
-      <scope>provided</scope>
-    </dependency>
+    <!--<dependency>-->
+      <!--<groupId>org.apache.spark</groupId>-->
+      <!--<artifactId>spark-streaming-kafka_2.10</artifactId>-->
+      <!--<version>${spark.version}</version>-->
+      <!--<scope>provided</scope>-->
+    <!--</dependency>-->
     <dependency>
       <groupId>org.apache.spark</groupId>
       <artifactId>spark-network-common_2.10</artifactId>
       <version>${spark.version}</version>
       <scope>provided</scope>
     </dependency>
-    <dependency>
-      <groupId>org.apache.kafka</groupId>
-      <artifactId>kafka_2.10</artifactId>
-      <version>${kafka.version}</version>
-      <scope>provided</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.kafka</groupId>
-      <artifactId>kafka-clients</artifactId>
-      <version>${kafka.version}</version>
-      <scope>provided</scope>
-    </dependency>
+    <!--<dependency>-->
+      <!--<groupId>org.apache.kafka</groupId>-->
+      <!--<artifactId>kafka_2.10</artifactId>-->
+      <!--<version>${kafka.version}</version>-->
+      <!--<scope>provided</scope>-->
+    <!--</dependency>-->
+    <!--<dependency>-->
+      <!--<groupId>org.apache.kafka</groupId>-->
+      <!--<artifactId>kafka-clients</artifactId>-->
+      <!--<version>${kafka.version}</version>-->
+      <!--<scope>provided</scope>-->
+    <!--</dependency>-->
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-common</artifactId>
@@ -213,6 +212,16 @@
           <artifactId>slf4j-jdk14</artifactId>
         </exclusion>
       </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.beam</groupId>
+      <artifactId>beam-sdks-java-io-kafka</artifactId>
+      <version>${project.parent.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka_2.10</artifactId>
+      <version>0.9.0.1</version>
     </dependency>
     <dependency>
       <groupId>org.apache.beam</groupId>

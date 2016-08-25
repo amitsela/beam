@@ -560,7 +560,7 @@ public final class TransformTranslator {
       public void evaluate(Read.Bounded<T> transform, EvaluationContext context) {
         BoundedSource<T> boundedSource = transform.getSource();
         JavaRDD<WindowedValue<T>> input = new JavaRDD<>(
-            new SparkSource.SourceRDD<>(context.getSparkContext().sc(), boundedSource,
+            new SparkSource.BoundedSourceRDD<>(context.getSparkContext().sc(), boundedSource,
                 context.getRuntimeContext()),
                     scala.reflect.ClassTag$.MODULE$.<WindowedValue<T>>apply(WindowedValue.class));
         // cache to avoid re-evaluation of the source by Spark's lazy DAG evaluation.
