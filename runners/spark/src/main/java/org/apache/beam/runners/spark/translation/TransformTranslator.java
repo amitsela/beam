@@ -34,6 +34,7 @@ import org.apache.avro.mapreduce.AvroKeyInputFormat;
 import org.apache.beam.runners.spark.aggregators.AccumulatorSingleton;
 import org.apache.beam.runners.spark.aggregators.NamedAggregators;
 import org.apache.beam.runners.spark.coders.CoderHelpers;
+import org.apache.beam.runners.spark.io.SparkSource;
 import org.apache.beam.runners.spark.io.hadoop.HadoopIO;
 import org.apache.beam.runners.spark.io.hadoop.ShardNameTemplateHelper;
 import org.apache.beam.runners.spark.io.hadoop.TemplatedAvroKeyOutputFormat;
@@ -43,6 +44,7 @@ import org.apache.beam.sdk.coders.CannotProvideCoderException;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.io.AvroIO;
+import org.apache.beam.sdk.io.Read;
 import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.Create;
@@ -286,6 +288,20 @@ public final class TransformTranslator {
     };
   }
 
+  private static <T> TransformEvaluator<Read.Bounded<T>> readBounded() {
+    return new TransformEvaluator<Read.Bounded<T>>() {
+      @Override
+      public void evaluate(Read.Bounded<T> transform, EvaluationContext context) {
+        JavaRDD<WindowedValue<T>> input = new JavaRDD<>(
+            new SparkSource.SourceRDD<>(context.getSparkContext().sc(), transform.getSource(),
+                context.getRuntimeContext()),
+                    scala.reflect.ClassTag$.MODULE$.<WindowedValue<T>>apply(WindowedValue.class));
+        // cache to avoid re-evaluation of the source by Spark's lazy DAG evaluation.
+        input.cache();
+        context.setOutputRDD(transform, input);
+      }
+    };
+  }
 
   private static <T> TransformEvaluator<TextIO.Read.Bound<T>> readText() {
     return new TransformEvaluator<TextIO.Read.Bound<T>>() {
@@ -560,10 +576,12 @@ public final class TransformTranslator {
       .newHashMap();
 
   static {
-    EVALUATORS.put(TextIO.Read.Bound.class, readText());
-    EVALUATORS.put(TextIO.Write.Bound.class, writeText());
-    EVALUATORS.put(AvroIO.Read.Bound.class, readAvro());
-    EVALUATORS.put(AvroIO.Write.Bound.class, writeAvro());
+    //TODO: enable direct translations once BEAM-59 is resolved for hdfs (at least).
+//    EVALUATORS.put(TextIO.Read.Bound.class, readText());
+//    EVALUATORS.put(TextIO.Write.Bound.class, writeText());
+//    EVALUATORS.put(AvroIO.Read.Bound.class, readAvro());
+//    EVALUATORS.put(AvroIO.Write.Bound.class, writeAvro());
+    EVALUATORS.put(Read.Bounded.class, readBounded());
     EVALUATORS.put(HadoopIO.Read.Bound.class, readHadoop());
     EVALUATORS.put(HadoopIO.Write.Bound.class, writeHadoop());
     EVALUATORS.put(ParDo.Bound.class, parDo());
