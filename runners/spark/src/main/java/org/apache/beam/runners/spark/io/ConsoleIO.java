@@ -22,7 +22,7 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PDone;
 
 /**
- * Print to console.
+ * Print to console. For testing purposes.
  */
 public final class ConsoleIO {
 
@@ -37,11 +37,11 @@ public final class ConsoleIO {
     private Write() {
     }
 
-    public static <T> Unbound<T> from() {
+    public static <T> Unbound<T> out() {
       return new Unbound<>(10);
     }
 
-    public static <T> Unbound<T> from(int num) {
+    public static <T> Unbound<T> out(int num) {
       return new Unbound<>(num);
     }
 

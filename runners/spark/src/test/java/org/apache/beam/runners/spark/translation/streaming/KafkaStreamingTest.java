@@ -22,16 +22,15 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Properties;
-import kafka.serializer.StringDecoder;
 import org.apache.beam.runners.spark.EvaluationResult;
 import org.apache.beam.runners.spark.SparkPipelineOptions;
 import org.apache.beam.runners.spark.SparkRunner;
-import org.apache.beam.runners.spark.io.KafkaIO;
 import org.apache.beam.runners.spark.translation.streaming.utils.EmbeddedKafkaCluster;
 import org.apache.beam.runners.spark.translation.streaming.utils.PAssertStreaming;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.io.kafka.KafkaIO;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
@@ -74,14 +73,17 @@ public class KafkaStreamingTest {
     // write to Kafka
     Properties producerProps = new Properties();
     producerProps.putAll(EMBEDDED_KAFKA_CLUSTER.getProps());
-    producerProps.put("request.required.acks", 1);
+    producerProps.put("acks", "1");
     producerProps.put("bootstrap.servers", EMBEDDED_KAFKA_CLUSTER.getBrokerList());
+    producerProps.put("request.timeout.ms", "500");
     Serializer<String> stringSerializer = new StringSerializer();
     try (@SuppressWarnings("unchecked") KafkaProducer<String, String> kafkaProducer =
         new KafkaProducer(producerProps, stringSerializer, stringSerializer)) {
       for (Map.Entry<String, String> en : KAFKA_MESSAGES.entrySet()) {
         kafkaProducer.send(new ProducerRecord<>(TOPIC, en.getKey(), en.getValue()));
       }
+      // await send completion.
+      kafkaProducer.flush();
     }
   }
 
@@ -103,14 +105,19 @@ public class KafkaStreamingTest {
     options.setTimeout(TEST_TIMEOUT_MSEC); // run for one interval
     Pipeline p = Pipeline.create(options);
 
-    Map<String, String> kafkaParams = ImmutableMap.of(
-        "metadata.broker.list", EMBEDDED_KAFKA_CLUSTER.getBrokerList(),
-        "auto.offset.reset", "smallest"
+    Map<String, Object> consumerProps = ImmutableMap.<String, Object>of(
+        "group.id", "spark-beam-test-group",
+        "auto.offset.reset", "earliest"
     );
 
-    PCollection<KV<String, String>> kafkaInput = p.apply(KafkaIO.Read.from(StringDecoder.class,
-        StringDecoder.class, String.class, String.class, Collections.singleton(TOPIC),
-        kafkaParams))
+    KafkaIO.Read<String, String> read = KafkaIO.read()
+        .withBootstrapServers(EMBEDDED_KAFKA_CLUSTER.getBrokerList())
+        .withTopics(Collections.singletonList(TOPIC))
+        .withKeyCoder(StringUtf8Coder.of())
+        .withValueCoder(StringUtf8Coder.of())
+        .updateConsumerProperties(consumerProps);
+
+    PCollection<KV<String, String>> kafkaInput = p.apply(read.withoutMetadata())
         .setCoder(KvCoder.of(StringUtf8Coder.of(), StringUtf8Coder.of()));
     PCollection<KV<String, String>> windowedWords = kafkaInput
         .apply(Window.<KV<String, String>>into(FixedWindows.of(Duration.standardSeconds(1))));

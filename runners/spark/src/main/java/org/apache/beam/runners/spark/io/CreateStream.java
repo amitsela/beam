@@ -25,7 +25,7 @@ import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 
 /**
- * Create an input stream from Queue.
+ * Create an input stream from Queue. For testing purposes.
  *
  * @param <T> stream type
  */

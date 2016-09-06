@@ -20,17 +20,18 @@ package org.apache.beam.runners.spark.translation.streaming;
 import com.google.common.collect.Maps;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import kafka.serializer.Decoder;
 import org.apache.beam.runners.spark.BroadcastSideInputs;
+import org.apache.beam.runners.spark.SparkPipelineOptions;
 import org.apache.beam.runners.spark.aggregators.AccumulatorSingleton;
 import org.apache.beam.runners.spark.aggregators.NamedAggregators;
 import org.apache.beam.runners.spark.coders.CoderHelpers;
 import org.apache.beam.runners.spark.io.ConsoleIO;
 import org.apache.beam.runners.spark.io.CreateStream;
-import org.apache.beam.runners.spark.io.KafkaIO;
+import org.apache.beam.runners.spark.io.SparkSource;
+import org.apache.beam.runners.spark.stateful.StateSpecFunctions;
 import org.apache.beam.runners.spark.translation.DoFnFunction;
 import org.apache.beam.runners.spark.translation.EvaluationContext;
 import org.apache.beam.runners.spark.translation.GroupCombineFunctions;
@@ -44,6 +45,9 @@ import org.apache.beam.runners.spark.util.BroadcastHelper;
 import org.apache.beam.sdk.coders.CannotProvideCoderException;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.KvCoder;
+import org.apache.beam.sdk.io.Read;
+import org.apache.beam.sdk.io.Source;
+import org.apache.beam.sdk.io.UnboundedSource;
 import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.Flatten;
 import org.apache.beam.sdk.transforms.OldDoFn;
@@ -71,14 +75,12 @@ import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.streaming.Duration;
 import org.apache.spark.streaming.Durations;
+import org.apache.spark.streaming.StateSpec;
 import org.apache.spark.streaming.api.java.JavaDStream;
 import org.apache.spark.streaming.api.java.JavaDStreamLike;
+import org.apache.spark.streaming.api.java.JavaInputDStream;
+import org.apache.spark.streaming.api.java.JavaMapWithStateDStream;
 import org.apache.spark.streaming.api.java.JavaPairDStream;
-import org.apache.spark.streaming.api.java.JavaPairInputDStream;
-import org.apache.spark.streaming.api.java.JavaStreamingContext;
-import org.apache.spark.streaming.kafka.KafkaUtils;
-
-import scala.Tuple2;
 
 
 /**
@@ -89,7 +91,41 @@ public final class StreamingTransformTranslator {
   private StreamingTransformTranslator() {
   }
 
-  private static <T> TransformEvaluator<ConsoleIO.Write.Unbound<T>> print() {
+  private static <T, CheckpointMarkT extends UnboundedSource.CheckpointMark>
+      TransformEvaluator<Read.Unbounded<T>> readUnbounded() {
+    return new TransformEvaluator<Read.Unbounded<T>>() {
+      @Override
+      public void evaluate(Read.Unbounded<T> transform, EvaluationContext context) {
+        StreamingEvaluationContext sec = (StreamingEvaluationContext) context;
+        @SuppressWarnings("unchecked")
+        JavaDStream<KV<Source<T>, CheckpointMarkT>> inputDStream =
+            new JavaInputDStream<>(new SparkSource.SourceDStream<>(sec.getStreamingContext().ssc(),
+                (UnboundedSource<T, CheckpointMarkT>) transform.getSource(),
+                    sec.getRuntimeContext(), false),
+                        scala.reflect.ClassTag$.MODULE$.<KV<Source<T>,
+                            CheckpointMarkT>>apply(KV.class));
+        //TODO: consider broadcasting this instead of re-sending every batch.
+        final SparkRuntimeContext rc = sec.getRuntimeContext();
+        // call mapWithState to read from checkpointable sources.
+        JavaMapWithStateDStream<Source<T>, CheckpointMarkT, byte[],
+            Iterator<WindowedValue<T>>> mapWithStateDStream = inputDStream.mapToPair(
+                TranslationUtils.<Source<T>, CheckpointMarkT>toPairFunction()).mapWithState(
+                    StateSpec.function(StateSpecFunctions.<T,
+                        CheckpointMarkT>mapSourceFunction(rc)));
+        // set checkpoint duration for read stream, if set.
+        long checkpointDurationMillis = rc.getPipelineOptions().as(SparkPipelineOptions.class)
+            .getCheckpointDurationMillis();
+        if (checkpointDurationMillis > 0) {
+          mapWithStateDStream.checkpoint(new Duration(checkpointDurationMillis));
+        }
+        // output the flattened read iterator.
+        sec.setStream(transform, mapWithStateDStream.flatMap(
+            TranslationUtils.<WindowedValue<T>>flattenIter()));
+      }
+    };
+  }
+
+      private static <T> TransformEvaluator<ConsoleIO.Write.Unbound<T>> print() {
     return new TransformEvaluator<ConsoleIO.Write.Unbound<T>>() {
       @Override
       public void evaluate(ConsoleIO.Write.Unbound<T> transform, EvaluationContext context) {
@@ -98,32 +134,6 @@ public final class StreamingTransformTranslator {
             (JavaDStreamLike<WindowedValue<T>, ?, JavaRDD<WindowedValue<T>>>)
             ((StreamingEvaluationContext) context).getStream(transform);
         dstream.map(WindowingHelpers.<T>unwindowFunction()).print(transform.getNum());
-      }
-    };
-  }
-
-  private static <K, V> TransformEvaluator<KafkaIO.Read.Unbound<K, V>> kafka() {
-    return new TransformEvaluator<KafkaIO.Read.Unbound<K, V>>() {
-      @Override
-      public void evaluate(KafkaIO.Read.Unbound<K, V> transform, EvaluationContext context) {
-        StreamingEvaluationContext sec = (StreamingEvaluationContext) context;
-        JavaStreamingContext jssc = sec.getStreamingContext();
-        Class<K> keyClazz = transform.getKeyClass();
-        Class<V> valueClazz = transform.getValueClass();
-        Class<? extends Decoder<K>> keyDecoderClazz = transform.getKeyDecoderClass();
-        Class<? extends Decoder<V>> valueDecoderClazz = transform.getValueDecoderClass();
-        Map<String, String> kafkaParams = transform.getKafkaParams();
-        Set<String> topics = transform.getTopics();
-        JavaPairInputDStream<K, V> inputPairStream = KafkaUtils.createDirectStream(jssc, keyClazz,
-                valueClazz, keyDecoderClazz, valueDecoderClazz, kafkaParams, topics);
-        JavaDStream<WindowedValue<KV<K, V>>> inputStream =
-            inputPairStream.map(new Function<Tuple2<K, V>, KV<K, V>>() {
-          @Override
-          public KV<K, V> call(Tuple2<K, V> t2) throws Exception {
-            return KV.of(t2._1(), t2._2());
-          }
-        }).map(WindowingHelpers.<KV<K, V>>windowFunction());
-        sec.setStream(transform, inputStream);
       }
     };
   }
@@ -480,6 +490,7 @@ public final class StreamingTransformTranslator {
       .newHashMap();
 
   static {
+    EVALUATORS.put(Read.Unbounded.class, readUnbounded());
     EVALUATORS.put(GroupByKeyViaGroupByKeyOnly.GroupByKeyOnly.class, gbk());
     EVALUATORS.put(GroupByKeyViaGroupByKeyOnly.GroupAlsoByWindow.class, gabw());
     EVALUATORS.put(Combine.GroupedValues.class, grouped());
@@ -489,7 +500,6 @@ public final class StreamingTransformTranslator {
     EVALUATORS.put(ParDo.BoundMulti.class, multiDo());
     EVALUATORS.put(ConsoleIO.Write.Unbound.class, print());
     EVALUATORS.put(CreateStream.QueuedValues.class, createFromQueue());
-    EVALUATORS.put(KafkaIO.Read.Unbound.class, kafka());
     EVALUATORS.put(Window.Bound.class, window());
     EVALUATORS.put(Flatten.FlattenPCollectionList.class, flattenPColl());
   }

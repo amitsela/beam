@@ -21,6 +21,7 @@ package org.apache.beam.runners.spark.translation;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import java.io.Serializable;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import org.apache.beam.runners.spark.util.BroadcastHelper;
@@ -37,6 +38,7 @@ import org.apache.beam.sdk.util.state.StateInternalsFactory;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.TupleTag;
+import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.PairFunction;
 import org.apache.spark.streaming.api.java.JavaDStream;
@@ -122,8 +124,8 @@ public final class TranslationUtils {
     });
   }
 
-  /** {@link KV} to pair function. */
-  static <K, V> PairFunction<KV<K, V>, K, V> toPairFunction() {
+  /** A {@link KV} to pair function. */
+  public static <K, V> PairFunction<KV<K, V>, K, V> toPairFunction() {
     return new PairFunction<KV<K, V>, K, V>() {
       @Override
       public Tuple2<K, V> call(KV<K, V> kv) {
@@ -133,11 +135,26 @@ public final class TranslationUtils {
   }
 
   /**  A pair to {@link KV} function . */
-  static <K, V> Function<Tuple2<K, V>, KV<K, V>> fromPairFunction() {
+  public static <K, V> Function<Tuple2<K, V>, KV<K, V>> fromPairFunction() {
     return new Function<Tuple2<K, V>, KV<K, V>>() {
       @Override
       public KV<K, V> call(Tuple2<K, V> t2) {
         return KV.of(t2._1(), t2._2());
+      }
+    };
+  }
+
+  /** A Flatmap iterator function, flattening iterators into their elements. */
+  public static <T> FlatMapFunction<Iterator<T>, T> flattenIter() {
+    return new FlatMapFunction<Iterator<T>, T>() {
+      @Override
+      public Iterable<T> call(final Iterator<T> iter) throws Exception {
+        return new Iterable<T>() {
+          @Override
+          public Iterator<T> iterator() {
+            return iter;
+          }
+        };
       }
     };
   }
