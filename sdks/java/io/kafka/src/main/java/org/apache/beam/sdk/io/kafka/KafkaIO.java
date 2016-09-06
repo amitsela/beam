@@ -757,7 +757,7 @@ public class KafkaIO {
 
     private static final Duration KAFKA_POLL_TIMEOUT = Duration.millis(1000);
     // how long to wait for new records from kafka consumer inside start()
-    private static final Duration START_NEW_RECORDS_POLL_TIMEOUT = Duration.standardSeconds(5);
+    private static final Duration START_NEW_RECORDS_POLL_TIMEOUT = Duration.millis(100);
     // how long to wait for new records from kafka consumer inside advance()
     private static final Duration NEW_RECORDS_POLL_TIMEOUT = Duration.millis(10);
 
