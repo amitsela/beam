@@ -73,7 +73,6 @@ import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.spark.Accumulator;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
-import org.apache.spark.api.java.JavaRDDLike;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.PairFunction;
@@ -97,10 +96,10 @@ public final class TransformTranslator {
         PCollectionList<T> pcs = context.getInput(transform);
         JavaRDD<WindowedValue<T>>[] rdds = new JavaRDD[pcs.size()];
         for (int i = 0; i < rdds.length; i++) {
-          rdds[i] = (JavaRDD<WindowedValue<T>>) context.getRDD(pcs.get(i));
+          rdds[i] = ((BoundedDataset<T>) context.checkoutDataset(pcs.get(i))).getRDD();
         }
         JavaRDD<WindowedValue<T>> rdd = context.getSparkContext().union(rdds);
-        context.setOutputRDD(transform, rdd);
+        context.checkinDataset(transform, new BoundedDataset<>(rdd));
       }
     };
   }
@@ -111,9 +110,14 @@ public final class TransformTranslator {
       public void evaluate(GroupByKeyOnly<K, V> transform, EvaluationContext context) {
         @SuppressWarnings("unchecked")
         JavaRDD<WindowedValue<KV<K, V>>> inRDD =
-            (JavaRDD<WindowedValue<KV<K, V>>>) context.getInputRDD(transform);
+                ((BoundedDataset<KV<K, V>>) context.checkoutDataset(transform)).getRDD();
 
         @SuppressWarnings("unchecked")
+        KvCoder<K, V> coder = (KvCoder<K, V>) context.getInput(transform).getCoder();
+        final Coder<K> keyCoder = coder.getKeyCoder();
+        final Coder<V> valueCoder = coder.getValueCoder();
+        context.checkinDataset(transform, new BoundedDataset<>(
+            TranslationUtils.groupByKeyOnly(inRDD, keyCoder, valueCoder)));
         final KvCoder<K, V> coder = (KvCoder<K, V>) context.getInput(transform).getCoder();
 
         context.setOutputRDD(transform, GroupCombineFunctions.groupByKeyOnly(inRDD, coder));
@@ -128,8 +132,8 @@ public final class TransformTranslator {
       public void evaluate(GroupAlsoByWindow<K, V> transform, EvaluationContext context) {
         @SuppressWarnings("unchecked")
         JavaRDD<WindowedValue<KV<K, Iterable<WindowedValue<V>>>>> inRDD =
-            (JavaRDD<WindowedValue<KV<K, Iterable<WindowedValue<V>>>>>)
-                context.getInputRDD(transform);
+            ((BoundedDataset<KV<K, Iterable<WindowedValue<V>>>>)
+                context.checkoutDataset(transform)).getRDD();
 
         @SuppressWarnings("unchecked")
         final KvCoder<K, Iterable<WindowedValue<V>>> inputKvCoder =
@@ -138,8 +142,9 @@ public final class TransformTranslator {
         final Accumulator<NamedAggregators> accum =
             AccumulatorSingleton.getInstance(context.getSparkContext());
 
-        context.setOutputRDD(transform, GroupCombineFunctions.groupAlsoByWindow(inRDD, transform,
-            context.getRuntimeContext(), accum, inputKvCoder));
+        context.checkinDataset(transform, new BoundedDataset<>(
+            TranslationUtils.groupAlsoByWindow(inRDD, transform, context.getRuntimeContext(),
+                accum, inputKvCoder)));
       }
     };
   }
@@ -151,11 +156,10 @@ public final class TransformTranslator {
       public void evaluate(Combine.GroupedValues<K, InputT, OutputT> transform,
                            EvaluationContext context) {
         @SuppressWarnings("unchecked")
-        JavaRDDLike<WindowedValue<KV<K, Iterable<InputT>>>, ?> inRDD =
-            (JavaRDDLike<WindowedValue<KV<K, Iterable<InputT>>>, ?>)
-                context.getInputRDD(transform);
-        context.setOutputRDD(transform, inRDD.map(
-            new TranslationUtils.CombineGorupedValues<>(transform)));
+        JavaRDD<WindowedValue<KV<K, Iterable<InputT>>>> inRDD =
+            ((BoundedDataset<KV<K, Iterable<InputT>>>) context.checkoutDataset(transform)).getRDD();
+        context.checkinDataset(transform, new BoundedDataset<>(inRDD.map(
+            new TranslationUtils.CombineGorupedValues<>(transform))));
       }
     };
   }
@@ -168,7 +172,7 @@ public final class TransformTranslator {
       public void evaluate(Combine.Globally<InputT, OutputT> transform, EvaluationContext context) {
         @SuppressWarnings("unchecked")
         JavaRDD<WindowedValue<InputT>> inRdd =
-            (JavaRDD<WindowedValue<InputT>>) context.getInputRDD(transform);
+            ((BoundedDataset<InputT>) context.checkoutDataset(transform)).getRDD();
 
         @SuppressWarnings("unchecked")
         final Combine.CombineFn<InputT, AccumT, OutputT> globally =
@@ -186,10 +190,11 @@ public final class TransformTranslator {
         final Coder<OutputT> oCoder = context.getOutput(transform).getCoder();
         JavaRDD<byte[]> outRdd = context.getSparkContext().parallelize(
             // don't use Guava's ImmutableList.of as output may be null
-            CoderHelpers.toByteArrays(Collections.singleton(
-                GroupCombineFunctions.combineGlobally(inRdd, globally, iCoder, aCoder)), oCoder));
-        context.setOutputRDD(transform, outRdd.map(CoderHelpers.fromByteFunction(oCoder))
-            .map(WindowingHelpers.<OutputT>windowFunction()));
+            CoderHelpers.toByteArrays(Collections.singleton(TranslationUtils.combineGlobally(inRdd,
+                globally, iCoder, aCoder)), oCoder));
+        context.checkinDataset(transform, new BoundedDataset<>(
+            outRdd.map(CoderHelpers.fromByteFunction(oCoder)).map(
+                WindowingHelpers.<OutputT>windowFunction())));
       }
     };
   }
@@ -231,10 +236,10 @@ public final class TransformTranslator {
 
         @SuppressWarnings("unchecked")
         JavaRDD<WindowedValue<KV<K, InputT>>> inRdd =
-                (JavaRDD<WindowedValue<KV<K, InputT>>>) context.getInputRDD(transform);
+            ((BoundedDataset<KV<K, InputT>>) context.checkoutDataset(transform)).getRDD();
 
-        context.setOutputRDD(transform, GroupCombineFunctions.combinePerKey(inRdd, keyed, wkCoder,
-            wkviCoder, wkvaCoder));
+        context.checkinDataset(transform, new BoundedDataset<>(
+            TranslationUtils.combinePerKey(inRdd, keyed, wkCoder, wkviCoder, wkvaCoder)));
       }
     };
   }
@@ -244,15 +249,15 @@ public final class TransformTranslator {
       @Override
       public void evaluate(ParDo.Bound<InputT, OutputT> transform, EvaluationContext context) {
         @SuppressWarnings("unchecked")
-        JavaRDDLike<WindowedValue<InputT>, ?> inRDD =
-            (JavaRDDLike<WindowedValue<InputT>, ?>) context.getInputRDD(transform);
+        JavaRDD<WindowedValue<InputT>> inRDD =
+                ((BoundedDataset<InputT>) context.checkoutDataset(transform)).getRDD();
         Accumulator<NamedAggregators> accum =
             AccumulatorSingleton.getInstance(context.getSparkContext());
         Map<TupleTag<?>, BroadcastHelper<?>> sideInputs =
             TranslationUtils.getSideInputs(transform.getSideInputs(), context);
-        context.setOutputRDD(transform,
+        context.checkinDataset(transform, new BoundedDataset<>(
             inRDD.mapPartitions(new DoFnFunction<>(accum, transform.getFn(),
-                context.getRuntimeContext(), sideInputs)));
+                context.getRuntimeContext(), sideInputs))));
       }
     };
   }
@@ -263,8 +268,8 @@ public final class TransformTranslator {
       @Override
       public void evaluate(ParDo.BoundMulti<InputT, OutputT> transform, EvaluationContext context) {
         @SuppressWarnings("unchecked")
-        JavaRDDLike<WindowedValue<InputT>, ?> inRDD =
-            (JavaRDDLike<WindowedValue<InputT>, ?>) context.getInputRDD(transform);
+        JavaRDD<WindowedValue<InputT>> inRDD =
+           ((BoundedDataset<InputT>) context.checkoutDataset(transform)).getRDD();
         Accumulator<NamedAggregators> accum =
             AccumulatorSingleton.getInstance(context.getSparkContext());
         JavaPairRDD<TupleTag<?>, WindowedValue<?>> all = inRDD
@@ -282,7 +287,7 @@ public final class TransformTranslator {
           // Object is the best we can do since different outputs can have different tags
           JavaRDD<WindowedValue<Object>> values =
               (JavaRDD<WindowedValue<Object>>) (JavaRDD<?>) filtered.values();
-          context.setRDD(e.getValue(), values);
+          context.checkinDataset(e.getValue(), new BoundedDataset<>(values));
         }
       }
     };
@@ -309,8 +314,8 @@ public final class TransformTranslator {
       public void evaluate(TextIO.Read.Bound<T> transform, EvaluationContext context) {
         String pattern = transform.getFilepattern();
         JavaRDD<WindowedValue<String>> rdd = context.getSparkContext().textFile(pattern)
-                .map(WindowingHelpers.<String>windowFunction());
-        context.setOutputRDD(transform, rdd);
+            .map(WindowingHelpers.<String>windowFunction());
+        context.checkinDataset(transform, new BoundedDataset<>(rdd));
       }
     };
   }
@@ -321,7 +326,7 @@ public final class TransformTranslator {
       public void evaluate(TextIO.Write.Bound<T> transform, EvaluationContext context) {
         @SuppressWarnings("unchecked")
         JavaPairRDD<T, Void> last =
-            ((JavaRDDLike<WindowedValue<T>, ?>) context.getInputRDD(transform))
+            ((BoundedDataset<T>) context.checkoutDataset(transform)).getRDD()
             .map(WindowingHelpers.<T>unwindowFunction())
             .mapToPair(new PairFunction<T, T,
                     Void>() {
@@ -359,7 +364,7 @@ public final class TransformTranslator {
                 return key.datum();
               }
             }).map(WindowingHelpers.<T>windowFunction());
-        context.setOutputRDD(transform, rdd);
+        context.checkinDataset(transform, new BoundedDataset<>(rdd));
       }
     };
   }
@@ -377,7 +382,7 @@ public final class TransformTranslator {
         AvroJob.setOutputKeySchema(job, transform.getSchema());
         @SuppressWarnings("unchecked")
         JavaPairRDD<AvroKey<T>, NullWritable> last =
-            ((JavaRDDLike<WindowedValue<T>, ?>) context.getInputRDD(transform))
+            ((BoundedDataset<T>) context.checkoutDataset(transform)).getRDD()
             .map(WindowingHelpers.<T>unwindowFunction())
             .mapToPair(new PairFunction<T, AvroKey<T>, NullWritable>() {
               @Override
@@ -413,7 +418,7 @@ public final class TransformTranslator {
             return KV.of(t2._1(), t2._2());
           }
         }).map(WindowingHelpers.<KV<K, V>>windowFunction());
-        context.setOutputRDD(transform, rdd);
+        context.checkinDataset(transform, new BoundedDataset<>(rdd));
       }
     };
   }
@@ -423,8 +428,8 @@ public final class TransformTranslator {
       @Override
       public void evaluate(HadoopIO.Write.Bound<K, V> transform, EvaluationContext context) {
         @SuppressWarnings("unchecked")
-        JavaPairRDD<K, V> last = ((JavaRDDLike<WindowedValue<KV<K, V>>, ?>) context
-            .getInputRDD(transform))
+        JavaPairRDD<K, V> last = ((BoundedDataset<KV<K, V>>) context
+            .checkoutDataset(transform)).getRDD()
             .map(WindowingHelpers.<KV<K, V>>unwindowFunction())
             .mapToPair(new PairFunction<KV<K, V>, K, V>() {
               @Override
@@ -505,20 +510,20 @@ public final class TransformTranslator {
       @Override
       public void evaluate(Window.Bound<T> transform, EvaluationContext context) {
         @SuppressWarnings("unchecked")
-        JavaRDDLike<WindowedValue<T>, ?> inRDD =
-            (JavaRDDLike<WindowedValue<T>, ?>) context.getInputRDD(transform);
+        JavaRDD<WindowedValue<T>> inRDD =
+            ((BoundedDataset<T>) context.checkoutDataset(transform)).getRDD();
 
         if (TranslationUtils.skipAssignWindows(transform, context)) {
-          context.setOutputRDD(transform, inRDD);
+          context.checkinDataset(transform, new BoundedDataset<>(inRDD));
         } else {
           @SuppressWarnings("unchecked")
           WindowFn<? super T, W> windowFn = (WindowFn<? super T, W>) transform.getWindowFn();
           OldDoFn<T, T> addWindowsDoFn = new AssignWindowsDoFn<>(windowFn);
           Accumulator<NamedAggregators> accum =
               AccumulatorSingleton.getInstance(context.getSparkContext());
-          context.setOutputRDD(transform,
-              inRDD.mapPartitions(new DoFnFunction<>(accum, addWindowsDoFn,
-                  context.getRuntimeContext(), null)));
+          context.checkinDataset(transform,
+              new BoundedDataset<>(inRDD.mapPartitions(new DoFnFunction<>(accum, addWindowsDoFn,
+                  context.getRuntimeContext(), null))));
         }
       }
     };
@@ -532,7 +537,7 @@ public final class TransformTranslator {
         // Use a coder to convert the objects in the PCollection to byte arrays, so they
         // can be transferred over the network.
         Coder<T> coder = context.getOutput(transform).getCoder();
-        context.setOutputRDDFromValues(transform, elems, coder);
+        context.setDatasetFromValues(transform, elems, coder);
       }
     };
   }
@@ -611,10 +616,7 @@ public final class TransformTranslator {
 
     @Override
     public <TransformT extends PTransform<?, ?>> TransformEvaluator<TransformT> translate(
-        Class<TransformT> clazz, PCollection.IsBounded isBounded) {
-      if (isBounded.equals(PCollection.IsBounded.UNBOUNDED)) {
-        throw new IllegalStateException("TransformTranslator only handles BOUNDED.");
-      }
+        Class<TransformT> clazz) {
       @SuppressWarnings("unchecked")
       TransformEvaluator<TransformT> transformEvaluator =
           (TransformEvaluator<TransformT>) EVALUATORS.get(clazz);

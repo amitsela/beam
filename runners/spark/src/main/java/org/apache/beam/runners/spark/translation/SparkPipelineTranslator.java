@@ -18,7 +18,6 @@
 package org.apache.beam.runners.spark.translation;
 
 import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.values.PCollection;
 
 /**
  * Translator to support translation between Beam transformations and Spark transformations.
@@ -28,5 +27,5 @@ public interface SparkPipelineTranslator {
   boolean hasTranslation(Class<? extends PTransform<?, ?>> clazz);
 
   <TransformT extends PTransform<?, ?>> TransformEvaluator<TransformT>
-  translate(Class<TransformT> clazz, PCollection.IsBounded isBounded);
+  translate(Class<TransformT> clazz);
 }

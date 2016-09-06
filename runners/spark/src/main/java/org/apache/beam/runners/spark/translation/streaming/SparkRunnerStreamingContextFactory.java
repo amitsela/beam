@@ -53,8 +53,6 @@ public class SparkRunnerStreamingContextFactory implements JavaStreamingContextF
   public JavaStreamingContext create() {
     LOG.info("Creating a new Spark Streaming Context");
 
-    SparkPipelineTranslator translator = new StreamingTransformTranslator.Translator(
-        new TransformTranslator.Translator());
     Duration batchDuration = new Duration(options.getBatchIntervalMillis());
     LOG.info("Setting Spark streaming batchDuration to {} msec", batchDuration.milliseconds());
 
@@ -62,7 +60,7 @@ public class SparkRunnerStreamingContextFactory implements JavaStreamingContextF
     JavaStreamingContext jssc = new JavaStreamingContext(jsc, batchDuration);
     ctxt = new StreamingEvaluationContext(jsc, pipeline, jssc,
         options.getTimeout());
-    pipeline.traverseTopologically(new SparkRunner.Evaluator(translator, ctxt));
+    pipeline.traverseTopologically(new SparkRunner.Evaluator(ctxt));
     ctxt.computeOutputs();
 
     jssc.checkpoint(options.getCheckpointDir());

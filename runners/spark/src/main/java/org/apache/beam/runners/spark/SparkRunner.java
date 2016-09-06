@@ -27,6 +27,7 @@ import org.apache.beam.runners.spark.translation.TransformEvaluator;
 import org.apache.beam.runners.spark.translation.TransformTranslator;
 import org.apache.beam.runners.spark.translation.streaming.SparkRunnerStreamingContextFactory;
 import org.apache.beam.runners.spark.translation.streaming.StreamingEvaluationContext;
+import org.apache.beam.runners.spark.util.SinglePrimitiveOutputPTransform;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
@@ -34,14 +35,16 @@ import org.apache.beam.sdk.options.PipelineOptionsValidator;
 import org.apache.beam.sdk.runners.PipelineRunner;
 import org.apache.beam.sdk.runners.TransformTreeNode;
 import org.apache.beam.sdk.transforms.AppliedPTransform;
+import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.util.GroupByKeyViaGroupByKeyOnly;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.PCollectionList;
+import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
-import org.apache.beam.sdk.values.PValue;
 import org.apache.spark.SparkException;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.streaming.api.java.JavaStreamingContext;
@@ -122,6 +125,9 @@ public final class SparkRunner extends PipelineRunner<EvaluationResult> {
     if (transform instanceof GroupByKey) {
       return (OutputT) ((PCollection) input).apply(
           new GroupByKeyViaGroupByKeyOnly((GroupByKey) transform));
+    } else if (transform instanceof Create.Values) {
+      return (OutputT) super.apply(
+        new SinglePrimitiveOutputPTransform((Create.Values) transform), input);
     } else {
       return super.apply(transform, input);
     }
@@ -161,7 +167,7 @@ public final class SparkRunner extends PipelineRunner<EvaluationResult> {
         JavaSparkContext jsc = SparkContextFactory.getSparkContext(mOptions);
         EvaluationContext ctxt = new EvaluationContext(jsc, pipeline);
         SparkPipelineTranslator translator = new TransformTranslator.Translator();
-        pipeline.traverseTopologically(new Evaluator(translator, ctxt));
+        pipeline.traverseTopologically(new Evaluator(ctxt));
         ctxt.computeOutputs();
 
         LOG.info("Pipeline execution complete.");
@@ -194,10 +200,8 @@ public final class SparkRunner extends PipelineRunner<EvaluationResult> {
     private static final Logger LOG = LoggerFactory.getLogger(Evaluator.class);
 
     private final EvaluationContext ctxt;
-    private final SparkPipelineTranslator translator;
 
-    public Evaluator(SparkPipelineTranslator translator, EvaluationContext ctxt) {
-      this.translator = translator;
+    public Evaluator(EvaluationContext ctxt) {
       this.ctxt = ctxt;
     }
 
@@ -207,7 +211,7 @@ public final class SparkRunner extends PipelineRunner<EvaluationResult> {
         @SuppressWarnings("unchecked")
         Class<PTransform<?, ?>> transformClass =
             (Class<PTransform<?, ?>>) node.getTransform().getClass();
-        if (translator.hasTranslation(transformClass)) {
+        if (ctxt.getTranslator(node).hasTranslation(transformClass)) {
           LOG.info("Entering directly-translatable composite transform: '{}'", node.getFullName());
           LOG.debug("Composite transform class: '{}'", transformClass);
           doVisitTransform(node);
@@ -228,47 +232,14 @@ public final class SparkRunner extends PipelineRunner<EvaluationResult> {
       TransformT transform = (TransformT) node.getTransform();
       @SuppressWarnings("unchecked")
       Class<TransformT> transformClass = (Class<TransformT>) (Class<?>) transform.getClass();
-      PCollection.IsBounded isBounded = isNodeBounded(node);
-      LOG.info("Translating {} as {}", transform, isBounded);
       @SuppressWarnings("unchecked") TransformEvaluator<TransformT> evaluator =
-          translator.translate(transformClass, isBounded);
+          ctxt.getTranslator(node).translate(transformClass);
       LOG.info("Evaluating {}", transform);
       AppliedPTransform<PInput, POutput, TransformT> appliedTransform =
           AppliedPTransform.of(node.getFullName(), node.getInput(), node.getOutput(), transform);
       ctxt.setCurrentTransform(appliedTransform);
       evaluator.evaluate(transform, ctxt);
       ctxt.setCurrentTransform(null);
-    }
-
-    /** Determine if this Node belongs to a Bounded branch of the pipeline, or Unbounded. */
-    private PCollection.IsBounded isNodeBounded(TransformTreeNode node) {
-      // usually, the input determines PCollection to apply the next transformation to is BOUNDED
-      // or UNBOUNDED, meaning RDD/DStream - thus mapping to Streaming/EvaluationContext.
-      Collection<? extends PValue> pValues;
-      PInput pInput = node.getInput();
-      if (pInput instanceof PBegin) {
-        // in case of a PBegin, it's the output.
-        pValues = node.getOutput().expand();
-      } else {
-        pValues = pInput.expand();
-      }
-      return isBoundedCollection(pValues);
-    }
-
-    private PCollection.IsBounded isBoundedCollection(Collection<? extends PValue> pValues) {
-      // anything that is not a PCollection, is BOUNDED.
-      // For PCollections:
-      // BOUNDED behaves as the Identity Element, BOUNDED + BOUNDED = BOUNDED
-      // while BOUNDED + UNBOUNDED = UNBOUNDED.
-      PCollection.IsBounded isBounded = PCollection.IsBounded.BOUNDED;
-      for (PValue pValue: pValues) {
-        if (pValue instanceof PCollection) {
-          isBounded = isBounded.and(((PCollection) pValue).isBounded());
-        } else {
-          isBounded = isBounded.and(PCollection.IsBounded.BOUNDED);
-        }
-      }
-      return isBounded;
     }
   }
 }

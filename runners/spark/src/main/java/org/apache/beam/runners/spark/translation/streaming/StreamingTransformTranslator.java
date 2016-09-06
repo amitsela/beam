@@ -490,7 +490,6 @@ public final class StreamingTransformTranslator {
       .newHashMap();
 
   static {
-    EVALUATORS.put(Read.Unbounded.class, readUnbounded());
     EVALUATORS.put(GroupByKeyViaGroupByKeyOnly.GroupByKeyOnly.class, gbk());
     EVALUATORS.put(GroupByKeyViaGroupByKeyOnly.GroupAlsoByWindow.class, gabw());
     EVALUATORS.put(Combine.GroupedValues.class, grouped());
@@ -500,6 +499,7 @@ public final class StreamingTransformTranslator {
     EVALUATORS.put(ParDo.BoundMulti.class, multiDo());
     EVALUATORS.put(ConsoleIO.Write.Unbound.class, print());
     EVALUATORS.put(CreateStream.QueuedValues.class, createFromQueue());
+    EVALUATORS.put(KafkaIO.Read.Unbound.class, kafka());
     EVALUATORS.put(Window.Bound.class, window());
     EVALUATORS.put(Flatten.FlattenPCollectionList.class, flattenPColl());
   }
@@ -522,28 +522,17 @@ public final class StreamingTransformTranslator {
    */
   public static class Translator implements SparkPipelineTranslator {
 
-    private final SparkPipelineTranslator batchTranslator;
-
-    Translator(SparkPipelineTranslator batchTranslator) {
-      this.batchTranslator = batchTranslator;
-    }
-
     @Override
     public boolean hasTranslation(Class<? extends PTransform<?, ?>> clazz) {
-      // streaming includes rdd transformations as well
-      return EVALUATORS.containsKey(clazz) || batchTranslator.hasTranslation(clazz);
+      return EVALUATORS.containsKey(clazz);
     }
 
     @Override
     public <TransformT extends PTransform<?, ?>> TransformEvaluator<TransformT> translate(
-            Class<TransformT> clazz, PCollection.IsBounded isBounded) {
-      TransformEvaluator<TransformT> transformEvaluator;
-      if (isBounded.equals(PCollection.IsBounded.BOUNDED)) {
-        transformEvaluator = batchTranslator.translate(clazz, PCollection.IsBounded.BOUNDED);
-      } else {
-        //noinspection unchecked
-        transformEvaluator = (TransformEvaluator<TransformT>) EVALUATORS.get(clazz);
-      }
+            Class<TransformT> clazz) {
+      @SuppressWarnings("unchecked")
+      TransformEvaluator<TransformT> transformEvaluator =
+              (TransformEvaluator<TransformT>) EVALUATORS.get(clazz);
       if (transformEvaluator == null) {
         throw new IllegalStateException("No TransformEvaluator registered for " + clazz);
       }
