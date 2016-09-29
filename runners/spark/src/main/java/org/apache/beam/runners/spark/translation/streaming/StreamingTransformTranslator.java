@@ -106,7 +106,7 @@ public final class StreamingTransformTranslator {
       public void evaluate(Read.Unbounded<T> transform, EvaluationContext context) {
         StreamingEvaluationContext sec = (StreamingEvaluationContext) context;
         sec.setStream(transform, SparkUnboundedSource.read(sec.getStreamingContext(),
-                sec.getRuntimeContext(), transform.getSource()));
+            sec.getRuntimeContext(), transform.getSource()));
       }
     };
   }

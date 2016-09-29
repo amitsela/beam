@@ -20,14 +20,14 @@ import org.joda.time.Instant;
  * Mostly based on {@link org.apache.beam.sdk.io.BoundedReadFromUnboundedSource},
  * with some adjustments for this specific use-case.
  *
- * A {@link BoundedSource} wrapping an {@link UnboundedSource} to complement Spark's micro-batch
+ * <p>A {@link BoundedSource} wrapping an {@link UnboundedSource} to complement Spark's micro-batch
  * nature.
  *
- * By design, Spark's micro-batches are bounded by their duration. Spark also provides a
+ * <p>By design, Spark's micro-batches are bounded by their duration. Spark also provides a
  * back-pressure mechanism that may signal a bound by max records.
  */
 public class MicrobatchSource<T, CheckpointMarkT extends UnboundedSource.CheckpointMark>
-        extends BoundedSource<T> {
+    extends BoundedSource<T> {
 
   private final UnboundedSource<T, CheckpointMarkT> source;
   private final Duration maxReadTime;
@@ -66,12 +66,12 @@ public class MicrobatchSource<T, CheckpointMarkT extends UnboundedSource.Checkpo
   }
 
   @Override
-  public List<? extends BoundedSource<T>> splitIntoBundles(long desiredBundleSizeBytes,
-                                                           PipelineOptions options)
-          throws Exception {
+  public List<? extends BoundedSource<T>>
+      splitIntoBundles(long desiredBundleSizeBytes,
+                       PipelineOptions options) throws Exception {
     List<MicrobatchSource<T, CheckpointMarkT>> result = new ArrayList<>();
     List<? extends UnboundedSource<T, CheckpointMarkT>> splits =
-            source.generateInitialSplits(numInitialSplits, options);
+        source.generateInitialSplits(numInitialSplits, options);
     int numSplits = splits.size();
     long[] numRecords = splitNumRecords(maxNumRecords, numSplits);
     for (int i = 0; i < numSplits; i++) {
@@ -98,7 +98,7 @@ public class MicrobatchSource<T, CheckpointMarkT extends UnboundedSource.Checkpo
   }
 
   public BoundedReader<T> createReader(PipelineOptions options, CheckpointMarkT checkpointMark)
-          throws IOException {
+      throws IOException {
     return new Reader(source.createReader(options, checkpointMark));
   }
 
@@ -142,7 +142,7 @@ public class MicrobatchSource<T, CheckpointMarkT extends UnboundedSource.Checkpo
    * A {@link BoundedSource.BoundedReader}
    * wrapping an {@link UnboundedSource.UnboundedReader}.
    *
-   * This Reader will read until it reached the bound of duration, or max records,
+   * <p>This Reader will read until it reached the bound of duration, or max records,
    * whichever comes first.
    */
   public class Reader extends BoundedSource.BoundedReader<T> {
@@ -155,10 +155,10 @@ public class MicrobatchSource<T, CheckpointMarkT extends UnboundedSource.Checkpo
       endTime = Instant.now().plus(maxReadTime);
       this.reader = reader;
       backoffFactory =
-              FluentBackoff.DEFAULT
-                      .withInitialBackoff(Duration.millis(10))
-                      .withMaxBackoff(maxReadTime.minus(1))
-                      .withMaxCumulativeBackoff(maxReadTime.minus(1));
+          FluentBackoff.DEFAULT
+              .withInitialBackoff(Duration.millis(10))
+              .withMaxBackoff(maxReadTime.minus(1))
+              .withMaxCumulativeBackoff(maxReadTime.minus(1));
     }
 
     @Override

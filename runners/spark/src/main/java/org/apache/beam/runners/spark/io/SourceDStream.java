@@ -40,17 +40,17 @@ import scala.Tuple2;
 /**
  * A SourceDStream is an {@link InputDStream} of {@link SourceRDD.Unbounded}s.
  *
- * This InputDStream will create a stream of partitioned {@link UnboundedSource}s,
+ * <p>This InputDStream will create a stream of partitioned {@link UnboundedSource}s,
  * and their respective, (optional) starting {@link UnboundedSource.CheckpointMark}.
  *
- * The underlying Source is actually a {@link MicrobatchSource} with bounds on read duration,
+ * <p>The underlying Source is actually a {@link MicrobatchSource} with bounds on read duration,
  * and max records. Both set here.
  * Read duration bound is affected by {@link SparkPipelineOptions#getReadTimePercentage()} and
  * {@link SparkPipelineOptions#getMinReadTimeMillis()}.
  * Records bound is controlled by the {@link RateController} mechanism.
  */
 public class SourceDStream<T, CheckpointMarkT extends UnboundedSource.CheckpointMark>
-        extends InputDStream<Tuple2<Source<T>, CheckpointMarkT>> {
+      extends InputDStream<Tuple2<Source<T>, CheckpointMarkT>> {
   private static final Logger LOG = LoggerFactory.getLogger(SourceDStream.class);
 
   private final UnboundedSource<T, CheckpointMarkT> unboundedSource;
@@ -65,9 +65,9 @@ public class SourceDStream<T, CheckpointMarkT extends UnboundedSource.Checkpoint
     this.unboundedSource = unboundedSource;
     this.runtimeContext = runtimeContext;
     SparkPipelineOptions options = runtimeContext.getPipelineOptions().as(
-            SparkPipelineOptions.class);
+        SparkPipelineOptions.class);
     this.boundReadDuration = boundReadDuration(options.getReadTimePercentage(),
-            options.getMinReadTimeMillis());
+        options.getMinReadTimeMillis());
     // set initial parallelism once.
     this.initialParallelism = ssc().sc().defaultParallelism();
   }
@@ -75,9 +75,9 @@ public class SourceDStream<T, CheckpointMarkT extends UnboundedSource.Checkpoint
   @Override
   public scala.Option<RDD<Tuple2<Source<T>, CheckpointMarkT>>> compute(Time validTime) {
     MicrobatchSource<T, CheckpointMarkT> microbatchSource = new MicrobatchSource<>(
-            unboundedSource, boundReadDuration, initialParallelism, rateControlledMaxRecords(), -1);
+        unboundedSource, boundReadDuration, initialParallelism, rateControlledMaxRecords(), -1);
     RDD<scala.Tuple2<Source<T>, CheckpointMarkT>> rdd = new SourceRDD.Unbounded<>(
-            ssc().sc(), runtimeContext, microbatchSource);
+        ssc().sc(), runtimeContext, microbatchSource);
     return scala.Option.apply(rdd);
   }
 
@@ -99,10 +99,10 @@ public class SourceDStream<T, CheckpointMarkT extends UnboundedSource.Checkpoint
   private Duration boundReadDuration(double readTimePercentage, long minReadTimeMillis) {
     long batchDurationMillis = ssc().graph().batchDuration().milliseconds();
     Duration proportionalDuration = new Duration(Math.round(
-            batchDurationMillis * readTimePercentage));
+        batchDurationMillis * readTimePercentage));
     Duration lowerBoundDuration = new Duration(minReadTimeMillis);
     Duration readDuration = proportionalDuration.isLongerThan(lowerBoundDuration)
-            ? proportionalDuration : lowerBoundDuration;
+        ? proportionalDuration : lowerBoundDuration;
     LOG.info("Read duration set to: " + readDuration);
     return readDuration;
   }
@@ -115,7 +115,7 @@ public class SourceDStream<T, CheckpointMarkT extends UnboundedSource.Checkpoint
       long rateLimitPerSecond = rateControllerOption.get().getLatestRate();
       if (rateLimitPerSecond > 0) {
         long totalRateLimit =
-                rateLimitPerSecond * (ssc().graph().batchDuration().milliseconds() / 1000);
+            rateLimitPerSecond * (ssc().graph().batchDuration().milliseconds() / 1000);
         LOG.info("RateController set limit to {}", totalRateLimit);
         return totalRateLimit;
       }
@@ -125,7 +125,7 @@ public class SourceDStream<T, CheckpointMarkT extends UnboundedSource.Checkpoint
   }
 
   private final RateController rateController = new SourceRateController(id(),
-          RateEstimator$.MODULE$.create(ssc().conf(), ssc().graph().batchDuration()));
+      RateEstimator$.MODULE$.create(ssc().conf(), ssc().graph().batchDuration()));
 
   @Override
   public scala.Option<RateController> rateController() {

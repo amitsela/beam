@@ -134,7 +134,7 @@ public class SparkUnboundedSource {
     @Override
     public scala.collection.immutable.List<DStream<?>> dependencies() {
       return scala.collection.JavaConversions.asScalaBuffer(
-              Collections.<DStream<?>>singletonList(parent)).toList();
+          Collections.<DStream<?>>singletonList(parent)).toList();
     }
 
     @Override
@@ -157,10 +157,10 @@ public class SparkUnboundedSource {
     private void report(Time batchTime, long count) {
       // metadata - #records read and a description.
       scala.collection.immutable.Map<String, Object> metadata =
-              new scala.collection.immutable.Map.Map1<String, Object>(
-                      StreamInputInfo.METADATA_KEY_DESCRIPTION(),
-                      String.format("Read %d records from %s for batch time: %s", count, sourceName,
-                              batchTime));
+          new scala.collection.immutable.Map.Map1<String, Object>(
+              StreamInputInfo.METADATA_KEY_DESCRIPTION(),
+                  String.format("Read %d records from %s for batch time: %s", count, sourceName,
+                      batchTime));
       StreamInputInfo streamInputInfo = new StreamInputInfo(inputDStreamId, count, metadata);
       ssc().scheduler().inputInfoTracker().reportInfo(batchTime, streamInputInfo);
     }

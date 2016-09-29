@@ -205,11 +205,11 @@ public class SourceRDD {
   /**
    * A SourceRDD.Unbounded is the implementation of a micro-batch in a {@link SourceDStream}.
    *
-   * This RDD is made of P partitions, each containing a single pair-element of the partitioned
+   * <p>This RDD is made of P partitions, each containing a single pair-element of the partitioned
    * {@link MicrobatchSource} and an optional starting {@link UnboundedSource.CheckpointMark}.
    */
   public static class Unbounded<T, CheckpointMarkT extends
-          UnboundedSource.CheckpointMark> extends RDD<scala.Tuple2<Source<T>, CheckpointMarkT>> {
+        UnboundedSource.CheckpointMark> extends RDD<scala.Tuple2<Source<T>, CheckpointMarkT>> {
     private final MicrobatchSource<T, CheckpointMarkT> microbatchSource;
     private final SparkRuntimeContext runtimeContext;
 
