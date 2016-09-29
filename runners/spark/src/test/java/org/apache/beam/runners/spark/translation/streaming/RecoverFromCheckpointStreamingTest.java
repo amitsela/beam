@@ -17,8 +17,6 @@
  */
 package org.apache.beam.runners.spark.translation.streaming;
 
-import static org.hamcrest.Matchers.equalTo;
-import static org.junit.Assert.assertThat;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.Uninterruptibles;
@@ -27,17 +25,15 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
-import kafka.serializer.StringDecoder;
 import org.apache.beam.runners.spark.EvaluationResult;
 import org.apache.beam.runners.spark.SparkPipelineOptions;
 import org.apache.beam.runners.spark.aggregators.AccumulatorSingleton;
-import org.apache.beam.runners.spark.io.KafkaIO;
 import org.apache.beam.runners.spark.translation.streaming.utils.EmbeddedKafkaCluster;
 import org.apache.beam.runners.spark.translation.streaming.utils.PAssertStreaming;
 import org.apache.beam.runners.spark.translation.streaming.utils.TestOptionsForStreaming;
 import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.io.kafka.KafkaIO;
 import org.apache.beam.sdk.transforms.Aggregator;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
@@ -52,31 +48,33 @@ import org.apache.kafka.common.serialization.Serializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.joda.time.Duration;
 import org.junit.AfterClass;
+import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 
+
 /**
- * Tests DStream recovery from checkpoint - recreate the job and continue (from checkpoint).
- *
- * Tests Aggregators, which rely on Accumulators - Aggregators should be available, though state
- * is not preserved (Spark issue), so they start from initial value.
+ * Test DStream recovery from checkpoint.
+ * <p>Test the following:
+ * <ul>
+ * <li>Offset recovery: consumer set to "earliest", but a proper restart from checkpoint should
+ * not re-read consumed records.</li>
+ * <li>Accumulator recovery: Beam {@link Aggregator}s are implemented
+ * using {@link org.apache.spark.Accumulator}s, make sure they are not stale after recovery.</li>
  * //TODO: after the runner supports recovering the state of Aggregators, update this test's
- * expected values for the recovered (second) run.
+ * </ul>
+ * </p>
  */
 public class RecoverFromCheckpointStreamingTest {
   private static final EmbeddedKafkaCluster.EmbeddedZookeeper EMBEDDED_ZOOKEEPER =
       new EmbeddedKafkaCluster.EmbeddedZookeeper();
   private static final EmbeddedKafkaCluster EMBEDDED_KAFKA_CLUSTER =
       new EmbeddedKafkaCluster(EMBEDDED_ZOOKEEPER.getConnection(), new Properties());
-  private static final String TOPIC = "kafka_beam_test_topic";
-  private static final Map<String, String> KAFKA_MESSAGES = ImmutableMap.of(
-      "k1", "v1", "k2", "v2", "k3", "v3", "k4", "v4"
-  );
-  private static final String[] EXPECTED = {"k1,v1", "k2,v2", "k3,v3", "k4,v4"};
-  private static final long EXPECTED_AGG_FIRST = 4L;
+
+  private static final String TOPIC = "topic";
 
   @Rule
   public TemporaryFolder checkpointParentDir = new TemporaryFolder();
@@ -88,22 +86,9 @@ public class RecoverFromCheckpointStreamingTest {
   public static void init() throws IOException {
     EMBEDDED_ZOOKEEPER.startup();
     EMBEDDED_KAFKA_CLUSTER.startup();
-    /// this test actually requires to NOT reuse the context but rather to stop it and start again
-    // from the checkpoint with a brand new context.
+    //--- this is a recovery test, we actually want the context to close, and restart,
+    // disable the reuse set by surefire plugin.
     System.setProperty("beam.spark.test.reuseSparkContext", "false");
-    // write to Kafka
-    Properties producerProps = new Properties();
-    producerProps.putAll(EMBEDDED_KAFKA_CLUSTER.getProps());
-    producerProps.put("request.required.acks", 1);
-    producerProps.put("bootstrap.servers", EMBEDDED_KAFKA_CLUSTER.getBrokerList());
-    Serializer<String> stringSerializer = new StringSerializer();
-    try (@SuppressWarnings("unchecked") KafkaProducer<String, String> kafkaProducer =
-        new KafkaProducer(producerProps, stringSerializer, stringSerializer)) {
-      for (Map.Entry<String, String> en : KAFKA_MESSAGES.entrySet()) {
-        kafkaProducer.send(new ProducerRecord<>(TOPIC, en.getKey(), en.getValue()));
-      }
-      kafkaProducer.close();
-    }
   }
 
   @Test
@@ -111,50 +96,72 @@ public class RecoverFromCheckpointStreamingTest {
     SparkPipelineOptions options = commonOptions.withTmpCheckpointDir(
         checkpointParentDir.newFolder(getClass().getSimpleName()));
 
-    // checkpoint after first (and only) interval.
-    options.setCheckpointDurationMillis(options.getBatchIntervalMillis());
-
-    // first run will read from Kafka backlog - "auto.offset.reset=smallest"
-    EvaluationResult res = run(options);
+    //--- first run.
+    String[] expected1 = new String[]{"k1,v1", "k2,v2", "k3,v3", "k4,v4"};
+    produce(ImmutableMap.of("k1", "v1", "k2", "v2", "k3", "v3", "k4", "v4"));
+    EvaluationResult res = run(options, expected1);
     res.close();
     long processedMessages1 = res.getAggregatorValue("processedMessages", Long.class);
-    assertThat(String.format("Expected %d processed messages count but "
-        + "found %d", EXPECTED_AGG_FIRST, processedMessages1), processedMessages1,
-            equalTo(EXPECTED_AGG_FIRST));
+    Assert.assertEquals(String.format("Expected %d processed messages count but "
+        + "found %d", expected1.length, processedMessages1), expected1.length, processedMessages1);
 
-    // recovery should resume from last read offset, so nothing is read here.
-    res = runAgain(options);
+    //-- second run, from checkpoint.
+    String[] expected2 = new String[]{"k5,v5"};
+    produce(ImmutableMap.of("k5", "v5"));
+    res = runAgain(options, expected2);
     res.close();
     long processedMessages2 = res.getAggregatorValue("processedMessages", Long.class);
-    assertThat(String.format("Expected %d processed messages count but "
-        + "found %d", 0, processedMessages2), processedMessages2, equalTo(0L));
+    //TODO: once Accumulators can recover value -> assert = expected1 + expected2.
+    Assert.assertEquals(String.format("Expected %d processed messages count but "
+        + "found %d", expected2.length, processedMessages2), expected2.length, processedMessages2);
   }
 
-  private static EvaluationResult runAgain(SparkPipelineOptions options) {
-    AccumulatorSingleton.clear();
+  private static EvaluationResult runAgain(SparkPipelineOptions options, String[] expected) {
     // sleep before next run.
-    Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
-    return run(options);
+    Uninterruptibles.sleepUninterruptibly(10, TimeUnit.MILLISECONDS);
+    AccumulatorSingleton.clear();
+    return run(options, expected);
   }
 
-  private static EvaluationResult run(SparkPipelineOptions options) {
-    Map<String, String> kafkaParams = ImmutableMap.of(
-            "metadata.broker.list", EMBEDDED_KAFKA_CLUSTER.getBrokerList(),
-            "auto.offset.reset", "smallest"
+  private static EvaluationResult run(SparkPipelineOptions options, String[] expected) {
+    Map<String, Object> consumerProps = ImmutableMap.<String, Object>of(
+        "auto.offset.reset", "earliest"
     );
-    Pipeline p = Pipeline.create(options);
-    PCollection<KV<String, String>> kafkaInput = p.apply(KafkaIO.Read.from(
-        StringDecoder.class, StringDecoder.class, String.class, String.class,
-            Collections.singleton(TOPIC), kafkaParams)).setCoder(KvCoder.of(StringUtf8Coder.of(),
-                StringUtf8Coder.of()));
-    PCollection<KV<String, String>> windowedWords = kafkaInput
-        .apply(Window.<KV<String, String>>into(FixedWindows.of(Duration.standardSeconds(1))));
-    PCollection<String> formattedKV = windowedWords.apply(ParDo.of(
-        new FormatAsText()));
 
-    PAssertStreaming.assertContents(formattedKV, EXPECTED);
+    KafkaIO.Read<String, String> read = KafkaIO.read()
+        .withBootstrapServers(EMBEDDED_KAFKA_CLUSTER.getBrokerList())
+        .withTopics(Collections.singletonList(TOPIC))
+        .withKeyCoder(StringUtf8Coder.of())
+        .withValueCoder(StringUtf8Coder.of())
+        .updateConsumerProperties(consumerProps);
+
+    Duration windowDuration = new Duration(options.getBatchIntervalMillis());
+
+    Pipeline p = Pipeline.create(options);
+    PCollection<String> formattedKV =
+        p.apply(read.withoutMetadata())
+        .apply(Window.<KV<String, String>>into(FixedWindows.of(windowDuration)))
+        .apply(ParDo.of(new FormatAsText()));
+
+    PAssertStreaming.assertContents(formattedKV, expected);
 
     return  (EvaluationResult) p.run();
+  }
+
+  private static void produce(Map<String, String> messages) {
+    Properties producerProps = new Properties();
+    producerProps.putAll(EMBEDDED_KAFKA_CLUSTER.getProps());
+    producerProps.put("acks", "1");
+    producerProps.put("bootstrap.servers", EMBEDDED_KAFKA_CLUSTER.getBrokerList());
+    Serializer<String> stringSerializer = new StringSerializer();
+    try (@SuppressWarnings("unchecked") KafkaProducer<String, String> kafkaProducer =
+        new KafkaProducer(producerProps, stringSerializer, stringSerializer)) {
+          for (Map.Entry<String, String> en : messages.entrySet()) {
+            kafkaProducer.send(new ProducerRecord<>(TOPIC, en.getKey(), en.getValue()));
+          }
+          // await send completion.
+          kafkaProducer.flush();
+        }
   }
 
   @AfterClass

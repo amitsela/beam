@@ -19,21 +19,21 @@ package org.apache.beam.runners.spark.translation.streaming;
 
 import com.google.common.collect.ImmutableMap;
 import java.io.IOException;
-import java.util.Collections;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Properties;
-import kafka.serializer.StringDecoder;
 import org.apache.beam.runners.spark.EvaluationResult;
 import org.apache.beam.runners.spark.SparkPipelineOptions;
-import org.apache.beam.runners.spark.io.KafkaIO;
 import org.apache.beam.runners.spark.translation.streaming.utils.EmbeddedKafkaCluster;
 import org.apache.beam.runners.spark.translation.streaming.utils.PAssertStreaming;
 import org.apache.beam.runners.spark.translation.streaming.utils.TestOptionsForStreaming;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.io.kafka.KafkaIO;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.RemoveDuplicates;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
@@ -54,32 +54,14 @@ import org.junit.rules.TemporaryFolder;
  */
 public class KafkaStreamingTest {
   private static final EmbeddedKafkaCluster.EmbeddedZookeeper EMBEDDED_ZOOKEEPER =
-          new EmbeddedKafkaCluster.EmbeddedZookeeper();
+      new EmbeddedKafkaCluster.EmbeddedZookeeper();
   private static final EmbeddedKafkaCluster EMBEDDED_KAFKA_CLUSTER =
-          new EmbeddedKafkaCluster(EMBEDDED_ZOOKEEPER.getConnection(), new Properties());
-  private static final String TOPIC = "kafka_beam_test_topic";
-  private static final Map<String, String> KAFKA_MESSAGES = ImmutableMap.of(
-      "k1", "v1", "k2", "v2", "k3", "v3", "k4", "v4"
-  );
-  private static final String[] EXPECTED = {"k1,v1", "k2,v2", "k3,v3", "k4,v4"};
+      new EmbeddedKafkaCluster(EMBEDDED_ZOOKEEPER.getConnection(), new Properties());
 
   @BeforeClass
   public static void init() throws IOException {
     EMBEDDED_ZOOKEEPER.startup();
     EMBEDDED_KAFKA_CLUSTER.startup();
-
-    // write to Kafka
-    Properties producerProps = new Properties();
-    producerProps.putAll(EMBEDDED_KAFKA_CLUSTER.getProps());
-    producerProps.put("request.required.acks", 1);
-    producerProps.put("bootstrap.servers", EMBEDDED_KAFKA_CLUSTER.getBrokerList());
-    Serializer<String> stringSerializer = new StringSerializer();
-    try (@SuppressWarnings("unchecked") KafkaProducer<String, String> kafkaProducer =
-        new KafkaProducer(producerProps, stringSerializer, stringSerializer)) {
-      for (Map.Entry<String, String> en : KAFKA_MESSAGES.entrySet()) {
-        kafkaProducer.send(new ProducerRecord<>(TOPIC, en.getKey(), en.getValue()));
-      }
-    }
   }
 
   @Rule
@@ -92,25 +74,68 @@ public class KafkaStreamingTest {
   public void testRun() throws Exception {
     SparkPipelineOptions options = commonOptions.withTmpCheckpointDir(
         checkpointParentDir.newFolder(getClass().getSimpleName()));
-    Map<String, String> kafkaParams = ImmutableMap.of(
-        "metadata.broker.list", EMBEDDED_KAFKA_CLUSTER.getBrokerList(),
-        "auto.offset.reset", "smallest"
+    //--- setup
+    // two topics.
+    final String topic1 = "topic1";
+    final String topic2 = "topic2";
+    // messages.
+    final Map<String, String> messages = ImmutableMap.of(
+        "k1", "v1", "k2", "v2", "k3", "v3", "k4", "v4"
+    );
+    // expected.
+    final String[] expected = {"k1,v1", "k2,v2", "k3,v3", "k4,v4"};
+    // batch and window duration.
+    final Duration batchAndWindowDuration = Duration.standardSeconds(1);
+
+    //write to Kafka.
+    Serializer<String> stringSerializer = new StringSerializer();
+    try (@SuppressWarnings("unchecked") KafkaProducer<String, String> kafkaProducer =
+        new KafkaProducer(defaultProducerProps(), stringSerializer, stringSerializer)) {
+          // feed first topic.
+          for (Map.Entry<String, String> en : messages.entrySet()) {
+            kafkaProducer.send(new ProducerRecord<>(topic1, en.getKey(), en.getValue()));
+          }
+          // feed second topic.
+          for (Map.Entry<String, String> en : messages.entrySet()) {
+            kafkaProducer.send(new ProducerRecord<>(topic2, en.getKey(), en.getValue()));
+          }
+          // await send completion.
+          kafkaProducer.flush();
+        }
+
+    //------- test: read and dedup.
+    Pipeline p = Pipeline.create(options);
+
+    Map<String, Object> consumerProps = ImmutableMap.<String, Object>of(
+        "auto.offset.reset", "earliest"
     );
 
-    Pipeline p = Pipeline.create(options);
-    PCollection<KV<String, String>> kafkaInput = p.apply(KafkaIO.Read.from(StringDecoder.class,
-        StringDecoder.class, String.class, String.class, Collections.singleton(TOPIC),
-        kafkaParams))
-        .setCoder(KvCoder.of(StringUtf8Coder.of(), StringUtf8Coder.of()));
-    PCollection<KV<String, String>> windowedWords = kafkaInput
-        .apply(Window.<KV<String, String>>into(FixedWindows.of(Duration.standardSeconds(1))));
+    KafkaIO.Read<String, String> read = KafkaIO.read()
+        .withBootstrapServers(EMBEDDED_KAFKA_CLUSTER.getBrokerList())
+        .withTopics(Arrays.asList(topic1, topic2))
+        .withKeyCoder(StringUtf8Coder.of())
+        .withValueCoder(StringUtf8Coder.of())
+        .updateConsumerProperties(consumerProps);
 
-    PCollection<String> formattedKV = windowedWords.apply(ParDo.of(new FormatKVFn()));
+    PCollection<String> deduped =
+        p.apply(read.withoutMetadata()).setCoder(
+            KvCoder.of(StringUtf8Coder.of(), StringUtf8Coder.of()))
+        .apply(Window.<KV<String, String>>into(FixedWindows.of(batchAndWindowDuration)))
+        .apply(ParDo.of(new FormatKVFn()))
+        .apply(RemoveDuplicates.<String>create());
 
-    PAssertStreaming.assertContents(formattedKV, EXPECTED);
+    PAssertStreaming.assertContents(deduped, expected);
 
     EvaluationResult res = (EvaluationResult) p.run();
     res.close();
+  }
+
+  private Properties defaultProducerProps() {
+    Properties producerProps = new Properties();
+    producerProps.putAll(EMBEDDED_KAFKA_CLUSTER.getProps());
+    producerProps.put("acks", "1");
+    producerProps.put("bootstrap.servers", EMBEDDED_KAFKA_CLUSTER.getBrokerList());
+    return producerProps;
   }
 
   @AfterClass
@@ -125,5 +150,4 @@ public class KafkaStreamingTest {
       c.output(c.element().getKey() + "," + c.element().getValue());
     }
   }
-
 }
