@@ -220,7 +220,7 @@ public class SourceRDD {
                      SparkRuntimeContext runtimeContext,
                      MicrobatchSource<T, CheckpointMarkT> microbatchSource) {
       super(sc, NIL,
-          JavaSparkContext$.MODULE$.<scala.Tuple2<Source<T>,CheckpointMarkT>>fakeClassTag());
+          JavaSparkContext$.MODULE$.<scala.Tuple2<Source<T>, CheckpointMarkT>>fakeClassTag());
       this.runtimeContext = runtimeContext;
       this.microbatchSource = microbatchSource;
     }

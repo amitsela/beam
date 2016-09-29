@@ -92,7 +92,7 @@ public class EmbeddedKafkaCluster {
       if (sb.length() > 0) {
         sb.append(",");
       }
-      sb.append("localhost:").append(port);
+      sb.append("127.0.0.1:").append(port);
     }
     return sb.toString();
   }
@@ -106,9 +106,13 @@ public class EmbeddedKafkaCluster {
       properties.putAll(baseProperties);
       properties.setProperty("zookeeper.connect", zkConnection);
       properties.setProperty("broker.id", String.valueOf(i + 1));
-      properties.setProperty("host.name", "localhost");
+      properties.setProperty("advertised.host.name", "127.0.0.1");
+      properties.setProperty("host.name", "127.0.0.1");
+      properties.setProperty("advertised.port", Integer.toString(port));
       properties.setProperty("port", Integer.toString(port));
-      properties.setProperty("log.dir", logDir.getAbsolutePath());
+      properties.setProperty("log.dirs", logDir.getAbsolutePath());
+      properties.setProperty("offsets.topic.num.partitions", "1");
+      properties.setProperty("offsets.topic.replication.factor", "1");
       properties.setProperty("log.flush.interval.messages", String.valueOf(1));
 
       KafkaServerStartable broker = startBroker(properties);
@@ -128,8 +132,7 @@ public class EmbeddedKafkaCluster {
   public Properties getProps() {
     Properties props = new Properties();
     props.putAll(baseProperties);
-    props.put("metadata.broker.list", brokerList);
-    props.put("zookeeper.connect", zkConnection);
+    props.put("bootstrap.servers", brokerList);
     return props;
   }
 
@@ -202,7 +205,7 @@ public class EmbeddedKafkaCluster {
       if (this.port == -1) {
         this.port = TestUtils.getAvailablePort();
       }
-      this.factory = NIOServerCnxnFactory.createFactory(new InetSocketAddress("localhost", port),
+      this.factory = NIOServerCnxnFactory.createFactory(new InetSocketAddress("127.0.0.1", port),
               1024);
       this.snapshotDir = TestUtils.constructTempDir("embedded-zk/snapshot");
       this.logDir = TestUtils.constructTempDir("embedded-zk/log");
@@ -232,7 +235,7 @@ public class EmbeddedKafkaCluster {
     }
 
     public String getConnection() {
-      return "localhost:" + port;
+      return "127.0.0.1:" + port;
     }
 
     public void setPort(int port) {

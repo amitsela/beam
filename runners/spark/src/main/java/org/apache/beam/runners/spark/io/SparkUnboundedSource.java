@@ -63,14 +63,14 @@ public class SparkUnboundedSource {
                                      SparkRuntimeContext rc,
                                      UnboundedSource<T, CheckpointMarkT> source) {
     JavaPairInputDStream<Source<T>, CheckpointMarkT> inputDStream =
-            JavaPairInputDStream$.MODULE$.fromInputDStream(new SourceDStream<>(jssc.ssc(), source, rc),
-                    JavaSparkContext$.MODULE$.<Source<T>>fakeClassTag(),
-                    JavaSparkContext$.MODULE$.<CheckpointMarkT>fakeClassTag());
+        JavaPairInputDStream$.MODULE$.fromInputDStream(new SourceDStream<>(jssc.ssc(), source, rc),
+            JavaSparkContext$.MODULE$.<Source<T>>fakeClassTag(),
+                JavaSparkContext$.MODULE$.<CheckpointMarkT>fakeClassTag());
 
     // call mapWithState to read from a checkpointable sources.
     //TODO: consider broadcasting the rc instead of re-sending every batch.
     JavaMapWithStateDStream<Source<T>, CheckpointMarkT, byte[],
-            Iterator<WindowedValue<T>>> mapWithStateDStream = inputDStream.mapWithState(
+        Iterator<WindowedValue<T>>> mapWithStateDStream = inputDStream.mapWithState(
             StateSpec.function(StateSpecFunctions.<T, CheckpointMarkT>mapSourceFunction(rc)));
 
     // set checkpoint duration for read stream, if set.
@@ -79,11 +79,11 @@ public class SparkUnboundedSource {
     // info and the inputDStream it originated from.
     int id = inputDStream.inputDStream().id();
     ReportingFlatMappedDStream<WindowedValue<T>> reportingFlatMappedDStream =
-            new ReportingFlatMappedDStream<>(mapWithStateDStream.dstream(), id,
-                    getSourceName(source, id));
+        new ReportingFlatMappedDStream<>(mapWithStateDStream.dstream(), id,
+            getSourceName(source, id));
 
     return JavaDStream.fromDStream(reportingFlatMappedDStream,
-            JavaSparkContext$.MODULE$.<WindowedValue<T>>fakeClassTag());
+        JavaSparkContext$.MODULE$.<WindowedValue<T>>fakeClassTag());
   }
 
   private static <T> String getSourceName(Source<T> source, int id) {
@@ -100,7 +100,7 @@ public class SparkUnboundedSource {
   private static void checkpointStream(JavaDStream<?> dStream,
                                        SparkRuntimeContext rc) {
     long checkpointDurationMillis = rc.getPipelineOptions().as(SparkPipelineOptions.class)
-            .getCheckpointDurationMillis();
+        .getCheckpointDurationMillis();
     if (checkpointDurationMillis > 0) {
       dStream.checkpoint(new Duration(checkpointDurationMillis));
     }
@@ -144,7 +144,7 @@ public class SparkUnboundedSource {
       // compute this DStream - take single-iterator partitions an flatMap them.
       if (computedParentRDD.isDefined()) {
         RDD<T> computedRDD = computedParentRDD.get().toJavaRDD()
-                .flatMap(TranslationUtils.<T>flattenIter()).rdd().cache();
+            .flatMap(TranslationUtils.<T>flattenIter()).rdd().cache();
         // report - for RateEstimator and visibility.
         report(validTime, computedRDD.count());
         return scala.Option.apply(computedRDD);
