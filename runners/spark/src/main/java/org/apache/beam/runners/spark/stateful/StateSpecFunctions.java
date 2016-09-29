@@ -1,9 +1,9 @@
 package org.apache.beam.runners.spark.stateful;
 
-import com.google.common.base.Optional;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.Iterators;
 import java.io.IOException;
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -19,17 +19,26 @@ import org.apache.beam.sdk.io.UnboundedSource;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.PaneInfo;
 import org.apache.beam.sdk.util.WindowedValue;
-import org.apache.spark.api.java.function.Function3;
 import org.apache.spark.streaming.State;
+import org.apache.spark.streaming.StateSpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import scala.Option;
+import scala.runtime.AbstractFunction3;
 
 /**
  * A class containing {@link org.apache.spark.streaming.StateSpec} mappingFunctions.
  */
 public class StateSpecFunctions {
   private static final Logger LOG = LoggerFactory.getLogger(StateSpecFunctions.class);
+
+  /**
+   * A helper class that is essentially a {@link Serializable} {@link AbstractFunction3}.
+   */
+  private abstract static class SerializableFunction3<T1, T2, T3, T4>
+      extends AbstractFunction3<T1, T2, T3, T4> implements Serializable {
+  }
 
   /**
    * A {@link org.apache.spark.streaming.StateSpec} function to support reading from
@@ -53,21 +62,27 @@ public class StateSpecFunctions {
    * @param <T>               The type of the input stream elements.
    * @param <CheckpointMarkT> The type of the {@link UnboundedSource.CheckpointMark}.
    * @return The appropriate {@link org.apache.spark.streaming.StateSpec} function.
+   * <p>In order to avoid using Spark Guava's classes which pollute the
+   * classpath, we use the {@link StateSpec#function(scala.Function3)} signature which employs
+   * scala's native {@link scala.Option}, instead of the
+   * {@link StateSpec#function(org.apache.spark.api.java.function.Function3)} signature,
+   * which employs Guava's {@link com.google.common.base.Optional}.
+   * </p>
+   * <p>See also <a href="https://issues.apache.org/jira/browse/SPARK-4819">SPARK-4819</a>.</p>
    */
   public static <T, CheckpointMarkT extends UnboundedSource.CheckpointMark>
-  Function3<Source<T>, Optional<CheckpointMarkT>, /* CheckpointMarkT */State<byte[]>,
-          Iterator<WindowedValue<T>>> mapSourceFunction(final SparkRuntimeContext runtimeContext) {
+  scala.Function3<Source<T>, scala.Option<CheckpointMarkT>, /* CheckpointMarkT */State<byte[]>,
+      Iterator<WindowedValue<T>>> mapSourceFunction(final SparkRuntimeContext runtimeContext) {
 
-    return new Function3<Source<T>, Optional<CheckpointMarkT>, State<byte[]>,
-            Iterator<WindowedValue<T>>>() {
+    return new SerializableFunction3<Source<T>, Option<CheckpointMarkT>, State<byte[]>,
+        Iterator<WindowedValue<T>>>() {
+
       @Override
-      public Iterator<WindowedValue<T>>
-      call(Source<T> source,
-           Optional<CheckpointMarkT> startCheckpointMark,
-           State<byte[]> state) throws Exception {
+      public Iterator<WindowedValue<T>> apply(Source<T> source, scala.Option<CheckpointMarkT>
+          startCheckpointMark, State<byte[]> state) {
         // source as MicrobatchSource
         MicrobatchSource<T, CheckpointMarkT> microbatchSource =
-                (MicrobatchSource<T, CheckpointMarkT>) source;
+            (MicrobatchSource<T, CheckpointMarkT>) source;
 
         // if state exists, use it, otherwise it's first time so use the startCheckpointMark.
         // startCheckpointMark may be EmptyCheckpointMark (the Spark Java API tries to apply
@@ -77,8 +92,8 @@ public class StateSpecFunctions {
         if (state.exists()) {
           checkpointMark = CoderHelpers.fromByteArray(state.get(), checkpointCoder);
           LOG.info("Continue reading from an existing CheckpointMark.");
-        } else if (startCheckpointMark.isPresent()
-                && !startCheckpointMark.get().equals(EmptyCheckpointMark.get())) {
+        } else if (startCheckpointMark.isDefined()
+            && !startCheckpointMark.get().equals(EmptyCheckpointMark.get())) {
           checkpointMark = startCheckpointMark.get();
           LOG.info("Start reading from a provided CheckpointMark.");
         } else {
@@ -87,8 +102,13 @@ public class StateSpecFunctions {
         }
 
         // create reader.
-        BoundedSource.BoundedReader<T> reader = microbatchSource.createReader(
-                runtimeContext.getPipelineOptions(), checkpointMark);
+        BoundedSource.BoundedReader<T> reader = null;
+        try {
+          reader =
+              microbatchSource.createReader(runtimeContext.getPipelineOptions(), checkpointMark);
+        } catch (IOException e) {
+          throw new RuntimeException(e);
+        }
 
         // read microbatch.
         final List<WindowedValue<T>> readValues = new ArrayList<>();
@@ -119,6 +139,7 @@ public class StateSpecFunctions {
         } catch (IOException e) {
           throw new RuntimeException("Failed to read from reader.", e);
         }
+
         return Iterators.unmodifiableIterator(readValues.iterator());
       }
     };
