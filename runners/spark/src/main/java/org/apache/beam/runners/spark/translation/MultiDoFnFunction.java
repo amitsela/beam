@@ -18,25 +18,23 @@
 
 package org.apache.beam.runners.spark.translation;
 
-import com.google.common.base.Function;
-import com.google.common.collect.Iterators;
-import com.google.common.collect.LinkedListMultimap;
-import com.google.common.collect.Multimap;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
 import org.apache.beam.runners.spark.aggregators.NamedAggregators;
 import org.apache.beam.runners.spark.util.BroadcastHelper;
+import org.apache.beam.runners.spark.util.SparkDoFnRunner;
 import org.apache.beam.sdk.transforms.OldDoFn;
-import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.spark.Accumulator;
 import org.apache.spark.api.java.function.PairFlatMapFunction;
-import org.joda.time.Instant;
 
 import scala.Tuple2;
+
+
 
 /**
  * DoFunctions ignore side outputs. MultiDoFunctions deal with side outputs by enriching the
@@ -49,11 +47,11 @@ public class MultiDoFnFunction<InputT, OutputT>
     implements PairFlatMapFunction<Iterator<WindowedValue<InputT>>, TupleTag<?>,
         WindowedValue<?>> {
   private final Accumulator<NamedAggregators> accum;
-  private final OldDoFn<InputT, OutputT> mFunction;
-  private final SparkRuntimeContext mRuntimeContext;
-  private final TupleTag<OutputT> mMainOutputTag;
-  private final Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>> mSideInputs;
-  private final WindowFn<Object, ?> windowFn;
+  private final OldDoFn<InputT, OutputT> fn;
+  private final SparkRuntimeContext runtimeContext;
+  private final TupleTag<OutputT> mainOutputTag;
+  private final Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>> sideInputs;
+  private final WindowingStrategy<?, ?> windowingStrategy;
 
   /**
    * @param accum             The Spark Accumulator that handles the Beam Aggregators.
@@ -61,7 +59,7 @@ public class MultiDoFnFunction<InputT, OutputT>
    * @param runtimeContext    Runtime to apply function in.
    * @param mainOutputTag     The main output {@link TupleTag}.
    * @param sideInputs        Side inputs used in DoFunction.
-   * @param windowFn          Input {@link WindowFn}.
+   * @param windowingStrategy Input {@link WindowingStrategy}.
    */
   public MultiDoFnFunction(Accumulator<NamedAggregators> accum,
                            OldDoFn<InputT, OutputT> fn,
@@ -69,79 +67,21 @@ public class MultiDoFnFunction<InputT, OutputT>
                            TupleTag<OutputT> mainOutputTag,
                            Map<TupleTag<?>, KV<WindowingStrategy<?, ?>,
                                BroadcastHelper<?>>> sideInputs,
-                           WindowFn<Object, ?> windowFn) {
+                           WindowingStrategy<?, ?> windowingStrategy) {
     this.accum = accum;
-    this.mFunction = fn;
-    this.mRuntimeContext = runtimeContext;
-    this.mMainOutputTag = mainOutputTag;
-    this.mSideInputs = sideInputs;
-    this.windowFn = windowFn;
+    this.fn = fn;
+    this.runtimeContext = runtimeContext;
+    this.mainOutputTag = mainOutputTag;
+    this.sideInputs = sideInputs;
+    this.windowingStrategy = windowingStrategy;
   }
 
   @Override
-  public Iterable<Tuple2<TupleTag<?>, WindowedValue<?>>>
-      call(Iterator<WindowedValue<InputT>> iter) throws Exception {
-    return new ProcCtxt(mFunction, mRuntimeContext, mSideInputs, windowFn)
-        .callWithCtxt(iter);
+  public Iterable<Tuple2<TupleTag<?>, WindowedValue<?>>> call(Iterator<WindowedValue<InputT>> iter)
+      throws Exception {
+    SparkDoFnRunner<InputT, OutputT> doFnRunner = new SparkDoFnRunner<>(fn, runtimeContext, accum,
+        sideInputs, mainOutputTag, Collections.<TupleTag<?>>emptyList(), windowingStrategy);
+    return doFnRunner.processPartition(iter);
   }
 
-  private class ProcCtxt
-      extends SparkProcessContext<InputT, OutputT, Tuple2<TupleTag<?>, WindowedValue<?>>> {
-
-    private final Multimap<TupleTag<?>, WindowedValue<?>> outputs = LinkedListMultimap.create();
-
-    ProcCtxt(OldDoFn<InputT, OutputT> fn,
-             SparkRuntimeContext runtimeContext,
-             Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>> sideInputs,
-             WindowFn<Object, ?> windowFn) {
-      super(fn, runtimeContext, sideInputs, windowFn);
-    }
-
-    @Override
-    public synchronized void output(WindowedValue<OutputT> o) {
-      outputs.put(mMainOutputTag, o);
-    }
-
-    @Override
-    public synchronized <T> void sideOutput(TupleTag<T> tag, T t) {
-      sideOutputWithTimestamp(tag, t, windowedValue != null ? windowedValue.getTimestamp() : null);
-    }
-
-    @Override
-    public <T> void sideOutputWithTimestamp(TupleTag<T> tupleTag,
-                                            final T t,
-                                            final Instant timestamp) {
-      if (windowedValue == null) {
-        // this is start/finishBundle.
-        outputs.put(tupleTag, noElementWindowedValue(t, timestamp, windowFn));
-      } else {
-        outputs.put(tupleTag, WindowedValue.of(t, timestamp, windowedValue.getWindows(),
-            windowedValue.getPane()));
-      }
-    }
-
-    @Override
-    public Accumulator<NamedAggregators> getAccumulator() {
-      return accum;
-    }
-
-    @Override
-    protected void clearOutput() {
-      outputs.clear();
-    }
-
-    @Override
-    protected Iterator<Tuple2<TupleTag<?>, WindowedValue<?>>> getOutputIterator() {
-      return Iterators.transform(outputs.entries().iterator(),
-          new Function<Map.Entry<TupleTag<?>, WindowedValue<?>>,
-              Tuple2<TupleTag<?>, WindowedValue<?>>>() {
-        @Override
-        public Tuple2<TupleTag<?>, WindowedValue<?>> apply(Map.Entry<TupleTag<?>,
-            WindowedValue<?>> input) {
-          return new Tuple2<TupleTag<?>, WindowedValue<?>>(input.getKey(), input.getValue());
-        }
-      });
-    }
-
-  }
 }

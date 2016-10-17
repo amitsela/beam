@@ -251,16 +251,15 @@ public final class TransformTranslator {
         @SuppressWarnings("unchecked")
         JavaRDDLike<WindowedValue<InputT>, ?> inRDD =
             (JavaRDDLike<WindowedValue<InputT>, ?>) context.getInputRDD(transform);
-        @SuppressWarnings("unchecked")
-        final WindowFn<Object, ?> windowFn =
-            (WindowFn<Object, ?>) context.getInput(transform).getWindowingStrategy().getWindowFn();
+        final WindowingStrategy<?, ?> windowingStrategy =
+            context.getInput(transform).getWindowingStrategy();
         Accumulator<NamedAggregators> accum =
             AccumulatorSingleton.getInstance(context.getSparkContext());
         Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>> sideInputs =
             TranslationUtils.getSideInputs(transform.getSideInputs(), context);
         context.setOutputRDD(transform,
             inRDD.mapPartitions(new DoFnFunction<>(accum, transform.getFn(),
-                context.getRuntimeContext(), sideInputs, windowFn)));
+                context.getRuntimeContext(), sideInputs, windowingStrategy)));
       }
     };
   }
@@ -273,16 +272,15 @@ public final class TransformTranslator {
         @SuppressWarnings("unchecked")
         JavaRDDLike<WindowedValue<InputT>, ?> inRDD =
             (JavaRDDLike<WindowedValue<InputT>, ?>) context.getInputRDD(transform);
-        @SuppressWarnings("unchecked")
-        final WindowFn<Object, ?> windowFn =
-            (WindowFn<Object, ?>) context.getInput(transform).getWindowingStrategy().getWindowFn();
+        final WindowingStrategy<?, ?> windowingStrategy =
+            context.getInput(transform).getWindowingStrategy();
         Accumulator<NamedAggregators> accum =
             AccumulatorSingleton.getInstance(context.getSparkContext());
         JavaPairRDD<TupleTag<?>, WindowedValue<?>> all = inRDD
             .mapPartitionsToPair(
                 new MultiDoFnFunction<>(accum, transform.getFn(), context.getRuntimeContext(),
                 transform.getMainOutputTag(), TranslationUtils.getSideInputs(
-                    transform.getSideInputs(), context), windowFn)).cache();
+                    transform.getSideInputs(), context), windowingStrategy)).cache();
         PCollectionTuple pct = context.getOutput(transform);
         for (Map.Entry<TupleTag<?>, PCollection<?>> e : pct.getAll().entrySet()) {
           @SuppressWarnings("unchecked")

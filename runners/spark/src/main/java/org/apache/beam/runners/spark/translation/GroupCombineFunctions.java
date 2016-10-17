@@ -20,7 +20,6 @@ package org.apache.beam.runners.spark.translation;
 
 
 import com.google.common.collect.Lists;
-
 import java.util.Collections;
 import java.util.Map;
 import org.apache.beam.runners.core.GroupAlsoByWindowsViaOutputBufferDoFn;
@@ -37,7 +36,6 @@ import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.transforms.CombineWithContext;
 import org.apache.beam.sdk.transforms.OldDoFn;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
-import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.KV;
@@ -99,15 +97,14 @@ public class GroupCombineFunctions {
     @SuppressWarnings("unchecked")
     WindowingStrategy<?, W> windowingStrategy =
         (WindowingStrategy<?, W>) transform.getWindowingStrategy();
-    @SuppressWarnings("unchecked")
-    WindowFn<Object, W> windowFn = (WindowFn<Object, W>) windowingStrategy.getWindowFn();
 
     // GroupAlsoByWindow current uses a dummy in-memory StateInternals
     OldDoFn<KV<K, Iterable<WindowedValue<V>>>, KV<K, Iterable<V>>> gabwDoFn =
         new GroupAlsoByWindowsViaOutputBufferDoFn<K, V, Iterable<V>, W>(
             windowingStrategy, new TranslationUtils.InMemoryStateInternalsFactory<K>(),
                 SystemReduceFn.<K, V, W>buffering(inputIterableElementValueCoder));
-    return rdd.mapPartitions(new DoFnFunction<>(accum, gabwDoFn, runtimeContext, null, windowFn));
+    return rdd.mapPartitions(new DoFnFunction<>(accum, gabwDoFn, runtimeContext, null,
+        windowingStrategy));
   }
 
   /**

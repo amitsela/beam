@@ -39,9 +39,14 @@ import org.apache.beam.sdk.values.TupleTag;
 public class SparkSideInputReader implements SideInputReader {
   private final Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>> sideInputs;
 
-  public SparkSideInputReader(Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>>
+  private SparkSideInputReader(Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>>
                                   sideInputs) {
     this.sideInputs = sideInputs;
+  }
+
+  public static SideInputReader
+      create(Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>> sideInputs) {
+    return new SparkSideInputReader(sideInputs);
   }
 
   @Nullable

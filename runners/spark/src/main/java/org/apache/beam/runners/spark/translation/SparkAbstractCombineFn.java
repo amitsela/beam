@@ -72,7 +72,7 @@ public class SparkAbstractCombineFn implements Serializable {
   protected SparkCombineContext ctxtForInput(WindowedValue<?> input) {
     if (combineContext == null) {
       combineContext = new SparkCombineContext(runtimeContext.getPipelineOptions(),
-          new SparkSideInputReader(sideInputs));
+          SparkSideInputReader.create(sideInputs));
     }
     return combineContext.forInput(input);
   }

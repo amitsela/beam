@@ -18,20 +18,25 @@
 
 package org.apache.beam.runners.spark.translation;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
+import com.google.common.base.Function;
+import com.google.common.collect.Iterables;
+import java.util.Collections;
 import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
 import java.util.Map;
 import org.apache.beam.runners.spark.aggregators.NamedAggregators;
 import org.apache.beam.runners.spark.util.BroadcastHelper;
+import org.apache.beam.runners.spark.util.SparkDoFnRunner;
 import org.apache.beam.sdk.transforms.OldDoFn;
-import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.spark.Accumulator;
 import org.apache.spark.api.java.function.FlatMapFunction;
+
+import scala.Tuple2;
 
 
 
@@ -44,68 +49,47 @@ import org.apache.spark.api.java.function.FlatMapFunction;
 public class DoFnFunction<InputT, OutputT>
     implements FlatMapFunction<Iterator<WindowedValue<InputT>>, WindowedValue<OutputT>> {
   private final Accumulator<NamedAggregators> accum;
-  private final OldDoFn<InputT, OutputT> mFunction;
-  private final SparkRuntimeContext mRuntimeContext;
-  private final Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>> mSideInputs;
-  private final WindowFn<Object, ?> windowFn;
+  private final OldDoFn<InputT, OutputT> fn;
+  private final SparkRuntimeContext runtimeContext;
+  private final Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>> sideInputs;
+  private final WindowingStrategy<?, ?> windowingStrategy;
 
   /**
    * @param accum             The Spark Accumulator that handles the Beam Aggregators.
    * @param fn                DoFunction to be wrapped.
-   * @param runtime           Runtime to apply function in.
+   * @param runtimeContext    Runtime to apply function in.
    * @param sideInputs        Side inputs used in DoFunction.
-   * @param windowFn          Input {@link WindowFn}.
+   * @param windowingStrategy Input {@link WindowingStrategy}.
    */
   public DoFnFunction(Accumulator<NamedAggregators> accum,
                       OldDoFn<InputT, OutputT> fn,
-                      SparkRuntimeContext runtime,
+                      SparkRuntimeContext runtimeContext,
                       Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>> sideInputs,
-                      WindowFn<Object, ?> windowFn) {
+                      WindowingStrategy<?, ?> windowingStrategy) {
     this.accum = accum;
-    this.mFunction = fn;
-    this.mRuntimeContext = runtime;
-    this.mSideInputs = sideInputs;
-    this.windowFn = windowFn;
+    this.fn = fn;
+    this.runtimeContext = runtimeContext;
+    this.sideInputs = sideInputs;
+    this.windowingStrategy = windowingStrategy;
   }
 
 
   @Override
   public Iterable<WindowedValue<OutputT>> call(Iterator<WindowedValue<InputT>> iter) throws
       Exception {
-    return new ProcCtxt(mFunction, mRuntimeContext, mSideInputs, windowFn)
-        .callWithCtxt(iter);
-  }
-
-  private class ProcCtxt extends SparkProcessContext<InputT, OutputT, WindowedValue<OutputT>> {
-
-    private final List<WindowedValue<OutputT>> outputs = new LinkedList<>();
-
-    ProcCtxt(OldDoFn<InputT, OutputT> fn,
-             SparkRuntimeContext runtimeContext,
-             Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>> sideInputs,
-             WindowFn<Object, ?> windowFn) {
-      super(fn, runtimeContext, sideInputs, windowFn);
-    }
-
-    @Override
-    public synchronized void output(WindowedValue<OutputT> o) {
-      outputs.add(o);
-    }
-
-    @Override
-    public Accumulator<NamedAggregators> getAccumulator() {
-      return accum;
-    }
-
-    @Override
-    protected void clearOutput() {
-      outputs.clear();
-    }
-
-    @Override
-    protected Iterator<WindowedValue<OutputT>> getOutputIterator() {
-      return outputs.iterator();
-    }
+    final TupleTag<OutputT> mainOutputTag = new TupleTag<OutputT>(){};
+    SparkDoFnRunner<InputT, OutputT> doFnRunner = new SparkDoFnRunner<>(fn, runtimeContext, accum,
+        sideInputs, mainOutputTag, Collections.<TupleTag<?>>emptyList(), windowingStrategy);
+    return Iterables.transform(doFnRunner.processPartition(iter),
+        new Function<Tuple2<TupleTag<?>, WindowedValue<?>>, WindowedValue<OutputT>>() {
+          @SuppressWarnings("unchecked")
+          @Override
+          public WindowedValue<OutputT> apply(Tuple2<TupleTag<?>, WindowedValue<?>> taggedValue) {
+            checkArgument(taggedValue._1() == mainOutputTag,
+                "DoFnFunction expects main output only!");
+            return (WindowedValue<OutputT>) taggedValue._2();
+          }
+    });
   }
 
 }
