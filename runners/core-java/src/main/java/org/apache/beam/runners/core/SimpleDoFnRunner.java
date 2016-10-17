@@ -63,7 +63,7 @@ import org.joda.time.format.PeriodFormat;
 public class SimpleDoFnRunner<InputT, OutputT> implements DoFnRunner<InputT, OutputT> {
 
   /** The {@link OldDoFn} being run. */
-  private final OldDoFn<InputT, OutputT> fn;
+  protected final OldDoFn<InputT, OutputT> fn;
   /** The context used for running the {@link OldDoFn}. */
   private final DoFnContext<InputT, OutputT> context;
 
@@ -132,6 +132,10 @@ public class SimpleDoFnRunner<InputT, OutputT> implements DoFnRunner<InputT, Out
     }
   }
 
+  public OutputManager getOutputManager() {
+    return context.outputManager;
+  }
+
   /**
    * Returns a new {@link OldDoFn.ProcessContext} for the given element.
    */
@@ -140,7 +144,7 @@ public class SimpleDoFnRunner<InputT, OutputT> implements DoFnRunner<InputT, Out
     return new DoFnProcessContext<InputT, OutputT>(fn, context, elem);
   }
 
-  private RuntimeException wrapUserCodeException(Throwable t) {
+  protected RuntimeException wrapUserCodeException(Throwable t) {
     throw UserCodeException.wrapIf(!isSystemDoFn(), t);
   }
 
