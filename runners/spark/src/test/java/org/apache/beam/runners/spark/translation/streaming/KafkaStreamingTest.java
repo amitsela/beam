@@ -55,7 +55,7 @@ public class KafkaStreamingTest {
   private static final EmbeddedKafkaCluster.EmbeddedZookeeper EMBEDDED_ZOOKEEPER =
       new EmbeddedKafkaCluster.EmbeddedZookeeper();
   private static final EmbeddedKafkaCluster EMBEDDED_KAFKA_CLUSTER =
-      new EmbeddedKafkaCluster(EMBEDDED_ZOOKEEPER.getConnection(), new Properties());
+      new EmbeddedKafkaCluster(EMBEDDED_ZOOKEEPER.getConnection());
 
   @BeforeClass
   public static void init() throws IOException {
@@ -73,6 +73,9 @@ public class KafkaStreamingTest {
   public void testRun() throws Exception {
     SparkPipelineOptions options = commonOptions.withTmpCheckpointDir(
         checkpointParentDir.newFolder(getClass().getSimpleName()));
+    // It seems that the consumer's first "position" lookup take +200 msec,
+    // so to be on the safe side we'll set to 500 msec.
+    options.setMinReadTimeMillis(500L);
     //--- setup
     // two topics.
     final String topic1 = "topic1";

@@ -24,6 +24,7 @@ import de.javakaffee.kryoserializers.guava.ImmutableListSerializer;
 import de.javakaffee.kryoserializers.guava.ImmutableMapSerializer;
 import de.javakaffee.kryoserializers.guava.ImmutableMultimapSerializer;
 import de.javakaffee.kryoserializers.guava.ImmutableSetSerializer;
+import de.javakaffee.kryoserializers.guava.ReverseListSerializer;
 import org.apache.spark.serializer.KryoRegistrator;
 
 
@@ -40,5 +41,6 @@ public class BeamSparkRunnerRegistrator implements KryoRegistrator {
     ImmutableSetSerializer.registerSerializers(kryo);
     ImmutableMapSerializer.registerSerializers(kryo);
     ImmutableMultimapSerializer.registerSerializers(kryo);
+    ReverseListSerializer.registerSerializers(kryo);
   }
 }

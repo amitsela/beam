@@ -14,6 +14,8 @@ import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.util.FluentBackoff;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 /**
@@ -28,6 +30,7 @@ import org.joda.time.Instant;
  */
 public class MicrobatchSource<T, CheckpointMarkT extends UnboundedSource.CheckpointMark>
     extends BoundedSource<T> {
+  private static final Logger LOG = LoggerFactory.getLogger(MicrobatchSource.class);
 
   private final UnboundedSource<T, CheckpointMarkT> source;
   private final Duration maxReadTime;
@@ -163,6 +166,9 @@ public class MicrobatchSource<T, CheckpointMarkT extends UnboundedSource.Checkpo
 
     @Override
     public boolean start() throws IOException {
+      LOG.info("MicrobatchReader-{}: Starting a microbatch read from an unbounded source with a "
+          + "max read time of {} msec, and max number of records {}.", splitId, maxReadTime,
+              maxNumRecords);
       if (reader.start()) {
         recordsRead++;
         return true;
@@ -202,6 +208,8 @@ public class MicrobatchSource<T, CheckpointMarkT extends UnboundedSource.Checkpo
 
     private void finalizeCheckpoint() throws IOException {
       reader.getCheckpointMark().finalizeCheckpoint();
+      LOG.info("MicrobatchReader-{}: finalized CheckpointMark successfully after "
+          + "reading {} records.", splitId, recordsRead);
     }
 
     @Override
