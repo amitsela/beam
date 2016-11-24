@@ -26,11 +26,11 @@ import org.apache.spark.api.java.JavaSparkContext;
  * For resilience, {@link Accumulator}s are required to be wrapped in a Singleton.
  * @see <a href="https://spark.apache.org/docs/1.6.3/streaming-programming-guide.html#accumulators-and-broadcast-variables">accumulators</a>
  */
-class AccumulatorSingleton {
+public class AccumulatorSingleton {
 
   private static volatile Accumulator<NamedAggregators> instance = null;
 
-  static Accumulator<NamedAggregators> getInstance(JavaSparkContext jsc) {
+  public static Accumulator<NamedAggregators> getInstance(JavaSparkContext jsc) {
     if (instance == null) {
       synchronized (AccumulatorSingleton.class) {
         if (instance == null) {
