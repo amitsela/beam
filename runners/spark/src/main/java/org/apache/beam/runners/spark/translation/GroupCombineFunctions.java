@@ -19,10 +19,7 @@
 package org.apache.beam.runners.spark.translation;
 
 import com.google.common.collect.Lists;
-import java.util.Collections;
 import java.util.Map;
-import org.apache.beam.runners.core.SystemReduceFn;
-import org.apache.beam.runners.spark.aggregators.NamedAggregators;
 import org.apache.beam.runners.spark.coders.CoderHelpers;
 import org.apache.beam.runners.spark.util.BroadcastHelper;
 import org.apache.beam.runners.spark.util.ByteArray;
@@ -31,19 +28,16 @@ import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.IterableCoder;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.transforms.CombineWithContext;
-import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
+import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.TupleTag;
-import org.apache.spark.Accumulator;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.Function2;
-import org.apache.spark.api.java.function.PairFlatMapFunction;
-import scala.Tuple2;
 
 
 
@@ -53,58 +47,49 @@ import scala.Tuple2;
 public class GroupCombineFunctions {
 
   /**
-   * Apply {@link org.apache.beam.sdk.transforms.GroupByKey} to a Spark RDD.
+   * An implementation of
+   * {@link org.apache.beam.runners.core.GroupByKeyViaGroupByKeyOnly.GroupByKeyOnly}
+   * for the Spark runner.
    */
-  public static <K, V, W extends BoundedWindow> JavaRDD<WindowedValue<KV<K,
-      Iterable<V>>>> groupByKey(JavaRDD<WindowedValue<KV<K, V>>> rdd,
-                                Accumulator<NamedAggregators> accum,
-                                KvCoder<K, V> coder,
-                                SparkRuntimeContext runtimeContext,
-                                WindowingStrategy<?, W> windowingStrategy) {
+  public static <K, V> JavaRDD<WindowedValue<KV<K, Iterable<WindowedValue<V>>>>>
+      groupByKeyOnly(
+          JavaRDD<WindowedValue<KV<K, V>>> rdd,
+          KvCoder<K, V> coder,
+          WindowFn<?, ?> windowFn) {
     //--- coders.
     final Coder<K> keyCoder = coder.getKeyCoder();
     final Coder<V> valueCoder = coder.getValueCoder();
     final WindowedValue.WindowedValueCoder<V> wvCoder = WindowedValue.FullWindowedValueCoder.of(
-        valueCoder, windowingStrategy.getWindowFn().windowCoder());
+        valueCoder, windowFn.windowCoder());
 
     //--- groupByKey.
     // Use coders to convert objects in the PCollection to byte arrays, so they
     // can be transferred over the network for the shuffle.
-    JavaRDD<WindowedValue<KV<K, Iterable<WindowedValue<V>>>>> groupedByKey =
-        rdd.map(new ReifyTimestampsAndWindowsFunction<K, V>())
-            .map(WindowingHelpers.<KV<K, WindowedValue<V>>>unwindowFunction())
-            .mapToPair(TranslationUtils.<K, WindowedValue<V>>toPairFunction())
-            .mapToPair(CoderHelpers.toByteFunction(keyCoder, wvCoder))
-            .groupByKey()
-            .mapToPair(CoderHelpers.fromByteFunctionIterable(keyCoder, wvCoder))
-            // empty windows are OK here, see GroupByKey#evaluateHelper in the SDK
-            .map(TranslationUtils.<K, Iterable<WindowedValue<V>>>fromPairFunction())
-            .map(WindowingHelpers.<KV<K, Iterable<WindowedValue<V>>>>windowFunction());
-
-    //--- now group also by window.
-    // GroupAlsoByWindow currently uses a dummy in-memory StateInternals
-    return groupedByKey.flatMap(
-        new SparkGroupAlsoByWindowFn<>(
-            windowingStrategy,
-            new TranslationUtils.InMemoryStateInternalsFactory<K>(),
-            SystemReduceFn.<K, V, W>buffering(valueCoder),
-            runtimeContext,
-            accum));
+    return rdd
+        .map(new ReifyTimestampsAndWindowsFunction<K, V>())
+        .map(WindowingHelpers.<KV<K, WindowedValue<V>>>unwindowFunction())
+        .mapToPair(TranslationUtils.<K, WindowedValue<V>>toPairFunction())
+        .mapToPair(CoderHelpers.toByteFunction(keyCoder, wvCoder))
+        .groupByKey()
+        .mapToPair(CoderHelpers.fromByteFunctionIterable(keyCoder, wvCoder))
+        // empty windows are OK here, see GroupByKey#evaluateHelper in the SDK
+        .map(TranslationUtils.<K, Iterable<WindowedValue<V>>>fromPairFunction())
+        .map(WindowingHelpers.<KV<K, Iterable<WindowedValue<V>>>>windowFunction());
   }
 
   /**
    * Apply a composite {@link org.apache.beam.sdk.transforms.Combine.Globally} transformation.
    */
   public static <InputT, AccumT, OutputT> JavaRDD<WindowedValue<OutputT>>
-  combineGlobally(JavaRDD<WindowedValue<InputT>> rdd,
-                  final CombineWithContext.CombineFnWithContext<InputT, AccumT, OutputT> combineFn,
-                  final Coder<InputT> iCoder,
-                  final Coder<OutputT> oCoder,
-                  final SparkRuntimeContext runtimeContext,
-                  final WindowingStrategy<?, ?> windowingStrategy,
-                  final Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>>
-                      sideInputs,
-                  boolean hasDefault) {
+      combineGlobally(
+          JavaRDD<WindowedValue<InputT>> rdd,
+          final CombineWithContext.CombineFnWithContext<InputT, AccumT, OutputT> combineFn,
+          final Coder<InputT> iCoder,
+          final Coder<OutputT> oCoder,
+          final SparkRuntimeContext runtimeContext,
+          final WindowingStrategy<?, ?> windowingStrategy,
+          final Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>> sideInputs,
+          boolean hasDefault) {
     // handle empty input RDD, which will natively skip the entire execution as Spark will not
     // run on empty RDDs.
     if (rdd.isEmpty()) {
@@ -184,14 +169,13 @@ public class GroupCombineFunctions {
    * (DStream's transform callback), so passed arguments need to be Serializable.
    */
   public static <K, InputT, AccumT, OutputT> JavaRDD<WindowedValue<KV<K, OutputT>>>
-  combinePerKey(JavaRDD<WindowedValue<KV<K, InputT>>> rdd,
-                final CombineWithContext.KeyedCombineFnWithContext<K, InputT, AccumT, OutputT>
-                    combineFn,
-                final KvCoder<K, InputT> inputCoder,
-                final SparkRuntimeContext runtimeContext,
-                final WindowingStrategy<?, ?> windowingStrategy,
-                final Map<TupleTag<?>, KV<WindowingStrategy<?, ?>,
-                    BroadcastHelper<?>>> sideInputs) {
+      combinePerKey(
+          JavaRDD<WindowedValue<KV<K, InputT>>> rdd,
+          final CombineWithContext.KeyedCombineFnWithContext<K, InputT, AccumT, OutputT> combineFn,
+          final KvCoder<K, InputT> inputCoder,
+          final SparkRuntimeContext runtimeContext,
+          final WindowingStrategy<?, ?> windowingStrategy,
+          final Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>> sideInputs) {
     //--- coders.
     final Coder<K> keyCoder = inputCoder.getKeyCoder();
     final Coder<InputT> viCoder = inputCoder.getValueCoder();
@@ -217,15 +201,7 @@ public class GroupCombineFunctions {
     // we won't need to duplicate the keys anymore.
     // Key has to bw windowed in order to group by window as well.
     JavaPairRDD<K, WindowedValue<KV<K, InputT>>> inRddDuplicatedKeyPair =
-        rdd.flatMapToPair(
-            new PairFlatMapFunction<WindowedValue<KV<K, InputT>>, K,
-                WindowedValue<KV<K, InputT>>>() {
-              @Override
-              public Iterable<Tuple2<K, WindowedValue<KV<K, InputT>>>>
-              call(WindowedValue<KV<K, InputT>> wkv) {
-                return Collections.singletonList(new Tuple2<>(wkv.getValue().getKey(), wkv));
-              }
-            });
+        rdd.mapToPair(TranslationUtils.<K, InputT>toPairByKeyInWindowedValue());
 
     final SparkKeyedCombineFn<K, InputT, AccumT, OutputT> sparkCombineFn =
         new SparkKeyedCombineFn<>(combineFn, runtimeContext, sideInputs, windowingStrategy);

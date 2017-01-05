@@ -70,29 +70,6 @@ public final class TranslationUtils {
   }
 
   /**
-   * A SparkKeyedCombineFn function applied to grouped KVs.
-   *
-   * @param <K>       Grouped key type.
-   * @param <InputT>  Grouped values type.
-   * @param <OutputT> Output type.
-   */
-  public static class CombineGroupedValues<K, InputT, OutputT> implements
-      Function<WindowedValue<KV<K, Iterable<InputT>>>, WindowedValue<KV<K, OutputT>>> {
-    private final SparkKeyedCombineFn<K, InputT, ?, OutputT> fn;
-
-    public CombineGroupedValues(SparkKeyedCombineFn<K, InputT, ?, OutputT> fn) {
-      this.fn = fn;
-    }
-
-    @Override
-    public WindowedValue<KV<K, OutputT>> call(WindowedValue<KV<K, Iterable<InputT>>> windowedKv)
-        throws Exception {
-      return WindowedValue.of(KV.of(windowedKv.getValue().getKey(), fn.apply(windowedKv)),
-          windowedKv.getTimestamp(), windowedKv.getWindows(), windowedKv.getPane());
-    }
-  }
-
-  /**
    * Checks if the window transformation should be applied or skipped.
    *
    * <p>

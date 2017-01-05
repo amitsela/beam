@@ -32,6 +32,7 @@ import java.util.Map;
 import org.apache.avro.mapred.AvroKey;
 import org.apache.avro.mapreduce.AvroJob;
 import org.apache.avro.mapreduce.AvroKeyInputFormat;
+import org.apache.beam.runners.core.SystemReduceFn;
 import org.apache.beam.runners.spark.aggregators.NamedAggregators;
 import org.apache.beam.runners.spark.aggregators.SparkAggregators;
 import org.apache.beam.runners.spark.coders.CoderHelpers;
@@ -58,6 +59,7 @@ import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.View;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.Window;
+import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.util.CombineFnUtil;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.util.WindowingStrategy;
@@ -109,56 +111,79 @@ public final class TransformTranslator {
     };
   }
 
-  private static <K, V> TransformEvaluator<GroupByKey<K, V>> groupByKey() {
+  private static <K, V, W extends BoundedWindow> TransformEvaluator<GroupByKey<K, V>> groupByKey() {
     return new TransformEvaluator<GroupByKey<K, V>>() {
       @Override
       public void evaluate(GroupByKey<K, V> transform, EvaluationContext context) {
         @SuppressWarnings("unchecked")
         JavaRDD<WindowedValue<KV<K, V>>> inRDD =
             ((BoundedDataset<KV<K, V>>) context.borrowDataset(transform)).getRDD();
-
         @SuppressWarnings("unchecked")
         final KvCoder<K, V> coder = (KvCoder<K, V>) context.getInput(transform).getCoder();
-
         final Accumulator<NamedAggregators> accum =
             SparkAggregators.getNamedAggregators(context.getSparkContext());
+        @SuppressWarnings("unchecked")
+        final WindowingStrategy<?, W> windowingStrategy =
+            (WindowingStrategy<?, W>) context.getInput(transform).getWindowingStrategy();
+        @SuppressWarnings("unchecked")
+        final WindowFn<Object, W> windowFn = (WindowFn<Object, W>) windowingStrategy.getWindowFn();
 
-        context.putDataset(transform,
-            new BoundedDataset<>(GroupCombineFunctions.groupByKey(inRDD, accum, coder,
-                context.getRuntimeContext(), context.getInput(transform).getWindowingStrategy())));
+        //--- group by key only.
+        JavaRDD<WindowedValue<KV<K, Iterable<WindowedValue<V>>>>> groupedByKey =
+            GroupCombineFunctions.groupByKeyOnly(inRDD, coder, windowFn);
+
+        //--- now group also by window.
+        // for batch, GroupAlsoByWindow uses an in-memory StateInternals.
+        JavaRDD<WindowedValue<KV<K, Iterable<V>>>> groupedAlsoByWindow = groupedByKey.flatMap(
+            new SparkGroupAlsoByWindowFn<>(
+                windowingStrategy,
+                new TranslationUtils.InMemoryStateInternalsFactory<K>(),
+                SystemReduceFn.<K, V, W>buffering(coder.getValueCoder()),
+                context.getRuntimeContext(),
+                accum));
+
+        context.putDataset(transform, new BoundedDataset<>(groupedAlsoByWindow));
       }
     };
   }
 
   private static <K, InputT, OutputT> TransformEvaluator<Combine.GroupedValues<K, InputT, OutputT>>
-  combineGrouped() {
-    return new TransformEvaluator<Combine.GroupedValues<K, InputT, OutputT>>() {
-      @Override
-      public void evaluate(Combine.GroupedValues<K, InputT, OutputT> transform,
-                           EvaluationContext context) {
-        // get the applied combine function.
-        PCollection<? extends KV<K, ? extends Iterable<InputT>>> input =
-            context.getInput(transform);
-        WindowingStrategy<?, ?> windowingStrategy = input.getWindowingStrategy();
-        @SuppressWarnings("unchecked")
-        CombineWithContext.KeyedCombineFnWithContext<K, InputT, ?, OutputT> fn =
-            (CombineWithContext.KeyedCombineFnWithContext<K, InputT, ?, OutputT>)
-                CombineFnUtil.toFnWithContext(transform.getFn());
+      combineGrouped() {
+          return new TransformEvaluator<Combine.GroupedValues<K, InputT, OutputT>>() {
+            @Override
+            public void evaluate(
+                Combine.GroupedValues<K, InputT, OutputT> transform,
+                EvaluationContext context) {
+              @SuppressWarnings("unchecked")
+              CombineWithContext.KeyedCombineFnWithContext<K, InputT, ?, OutputT> combineFn =
+                  (CombineWithContext.KeyedCombineFnWithContext<K, InputT, ?, OutputT>)
+                      CombineFnUtil.toFnWithContext(transform.getFn());
+              final SparkKeyedCombineFn<K, InputT, ?, OutputT> sparkCombineFn =
+                  new SparkKeyedCombineFn<>(combineFn, context.getRuntimeContext(),
+                      TranslationUtils.getSideInputs(transform.getSideInputs(), context),
+                          context.getInput(transform).getWindowingStrategy());
 
-        @SuppressWarnings("unchecked")
-        JavaRDD<WindowedValue<KV<K, Iterable<InputT>>>> inRDD =
-            ((BoundedDataset<KV<K, Iterable<InputT>>>)
-                context.borrowDataset(transform)).getRDD();
+              @SuppressWarnings("unchecked")
+              JavaRDD<WindowedValue<KV<K, Iterable<InputT>>>> inRDD =
+                  ((BoundedDataset<KV<K, Iterable<InputT>>>) context.borrowDataset(transform))
+                      .getRDD();
 
-        SparkKeyedCombineFn<K, InputT, ?, OutputT> combineFnWithContext =
-            new SparkKeyedCombineFn<>(fn, context.getRuntimeContext(),
-                TranslationUtils.getSideInputs(transform.getSideInputs(), context),
-                windowingStrategy);
-        context.putDataset(transform, new BoundedDataset<>(inRDD.map(new TranslationUtils
-            .CombineGroupedValues<>(
-            combineFnWithContext))));
-      }
-    };
+              JavaRDD<WindowedValue<KV<K, OutputT>>> outRDD = inRDD.map(
+                   new Function<WindowedValue<KV<K, Iterable<InputT>>>,
+                       WindowedValue<KV<K, OutputT>>>() {
+                         @Override
+                         public WindowedValue<KV<K, OutputT>> call(
+                             WindowedValue<KV<K, Iterable<InputT>>> in) throws Exception {
+                               return WindowedValue.of(
+                                   KV.of(in.getValue().getKey(), sparkCombineFn.apply(in)),
+                                   in.getTimestamp(),
+                                   in.getWindows(),
+                                   in.getPane());
+                             }
+                       });
+               context.putDataset(transform, new BoundedDataset<>(outRDD));
+            }
+          };
   }
 
   private static <InputT, AccumT, OutputT> TransformEvaluator<Combine.Globally<InputT, OutputT>>
