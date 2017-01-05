@@ -54,10 +54,7 @@ import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
-import org.apache.beam.sdk.transforms.windowing.FixedWindows;
-import org.apache.beam.sdk.transforms.windowing.SlidingWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
-import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.util.CombineFnUtil;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.util.WindowingStrategy;
@@ -71,8 +68,6 @@ import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.Function;
-import org.apache.spark.streaming.Duration;
-import org.apache.spark.streaming.Durations;
 import org.apache.spark.streaming.api.java.JavaDStream;
 import org.apache.spark.streaming.api.java.JavaPairDStream;
 
@@ -164,31 +159,13 @@ final class StreamingTransformTranslator {
       @Override
       public void evaluate(final Window.Bound<T> transform, EvaluationContext context) {
         @SuppressWarnings("unchecked")
-        WindowFn<? super T, W> windowFn = (WindowFn<? super T, W>) transform.getWindowFn();
-        @SuppressWarnings("unchecked")
         JavaDStream<WindowedValue<T>> dStream =
             ((UnboundedDataset<T>) context.borrowDataset(transform)).getDStream();
-        // get the right window durations.
-        Duration windowDuration;
-        Duration slideDuration;
-        if (windowFn instanceof FixedWindows) {
-          windowDuration = Durations.milliseconds(((FixedWindows) windowFn).getSize().getMillis());
-          slideDuration = windowDuration;
-        } else if (windowFn instanceof SlidingWindows) {
-          SlidingWindows slidingWindows = (SlidingWindows) windowFn;
-          windowDuration = Durations.milliseconds(slidingWindows.getSize().getMillis());
-          slideDuration = Durations.milliseconds(slidingWindows.getPeriod().getMillis());
-        } else {
-          throw new UnsupportedOperationException(String.format("WindowFn %s is not supported.",
-              windowFn.getClass().getCanonicalName()));
-        }
-        JavaDStream<WindowedValue<T>> windowedDStream =
-            dStream.window(windowDuration, slideDuration);
-        //--- then we apply windowing to the elements
         if (TranslationUtils.skipAssignWindows(transform, context)) {
-          context.putDataset(transform, new UnboundedDataset<>(windowedDStream));
+          // do nothing.
+          context.putDataset(transform, new UnboundedDataset<>(dStream));
         } else {
-          JavaDStream<WindowedValue<T>> outStream = windowedDStream.transform(
+          JavaDStream<WindowedValue<T>> outStream = dStream.transform(
               new Function<JavaRDD<WindowedValue<T>>, JavaRDD<WindowedValue<T>>>() {
             @Override
             public JavaRDD<WindowedValue<T>> call(JavaRDD<WindowedValue<T>> rdd) throws Exception {
