@@ -244,7 +244,7 @@ public class SparkGlobalCombineFn<InputT, AccumT, OutputT> extends SparkAbstract
     return output;
   }
 
-  Iterable<WindowedValue<OutputT>> extractOutput(Iterable<WindowedValue<AccumT>> wvas) {
+  public Iterable<WindowedValue<OutputT>> extractOutput(Iterable<WindowedValue<AccumT>> wvas) {
     return Iterables.transform(wvas,
         new Function<WindowedValue<AccumT>, WindowedValue<OutputT>>() {
           @Nullable

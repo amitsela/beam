@@ -255,19 +255,21 @@ public class SparkKeyedCombineFn<K, InputT, AccumT, OutputT> extends SparkAbstra
     return output;
   }
 
-  Iterable<WindowedValue<OutputT>> extractOutput(Iterable<WindowedValue<KV<K, AccumT>>> wkvas) {
-    return Iterables.transform(wkvas,
-        new Function<WindowedValue<KV<K, AccumT>>, WindowedValue<OutputT>>() {
-          @Nullable
-          @Override
-          public WindowedValue<OutputT> apply(@Nullable WindowedValue<KV<K, AccumT>> wkva) {
-            if (wkva == null) {
-              return null;
-            }
-            K key = wkva.getValue().getKey();
-            AccumT accumulator = wkva.getValue().getValue();
-            return wkva.withValue(combineFn.extractOutput(key, accumulator, ctxtForInput(wkva)));
-          }
-        });
+  public Iterable<WindowedValue<OutputT>> extractOutput(
+      Iterable<WindowedValue<KV<K, AccumT>>> wkvas) {
+        return Iterables.transform(wkvas,
+            new Function<WindowedValue<KV<K, AccumT>>, WindowedValue<OutputT>>() {
+              @Nullable
+              @Override
+              public WindowedValue<OutputT> apply(@Nullable WindowedValue<KV<K, AccumT>> wkva) {
+                if (wkva == null) {
+                  return null;
+                }
+                K key = wkva.getValue().getKey();
+                AccumT accumulator = wkva.getValue().getValue();
+                return wkva.withValue(combineFn.extractOutput(key, accumulator,
+                    ctxtForInput(wkva)));
+              }
+            });
   }
 }
