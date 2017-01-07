@@ -17,10 +17,10 @@
  */
 package org.apache.beam.runners.spark.stateful;
 
-import java.io.IOException;
+import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.util.TimeDomain;
 import org.apache.beam.sdk.util.TimerInternals;
-import org.apache.beam.sdk.util.state.StateNamespace;
+import org.apache.beam.sdk.util.state.StateNamespaces;
 import org.joda.time.Instant;
 
 
@@ -31,20 +31,7 @@ public class DummyTimerData {
 
   private static final TimerInternals.TimerData INSTANCE =
       TimerInternals.TimerData.of(
-          new StateNamespace() {
-            @Override
-            public String stringKey() {
-              return "dummy";
-            }
-
-            @Override
-            public void appendTo(Appendable sb) throws IOException { }
-
-            @Override
-            public Object getCacheKey() {
-              return stringKey();
-            }
-          },
+          StateNamespaces.window(GlobalWindow.Coder.INSTANCE, GlobalWindow.INSTANCE),
           Instant.now() /* doesn't matter when */,
           TimeDomain.PROCESSING_TIME /* doesn't matter which domain */);
 

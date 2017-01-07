@@ -105,4 +105,9 @@ public interface SparkPipelineOptions
   @Default.Boolean(false)
   boolean isForceStreaming();
   void setForceStreaming(boolean forceStreaming);
+
+  @Description("A forced timeout (millis), mostly for testing.")
+  @Default.Long(5000L)
+  Long getForcedTimeout();
+  void setForcedTimeout(Long forcedTimeout);
 }

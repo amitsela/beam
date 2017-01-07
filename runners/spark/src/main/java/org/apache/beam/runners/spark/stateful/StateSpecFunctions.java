@@ -45,6 +45,7 @@ import org.apache.beam.runners.spark.io.SparkUnboundedSource.Metadata;
 import org.apache.beam.runners.spark.translation.SparkRuntimeContext;
 import org.apache.beam.runners.spark.translation.TranslationUtils;
 import org.apache.beam.runners.spark.translation.WindowingHelpers;
+import org.apache.beam.runners.spark.util.GlobalWatermarkHolder;
 import org.apache.beam.runners.spark.util.LateDataUtils;
 import org.apache.beam.runners.spark.util.UnsupportedSideInputReader;
 import org.apache.beam.sdk.coders.Coder;
@@ -66,7 +67,6 @@ import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.JavaSparkContext$;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.Function2;
-import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.streaming.State;
 import org.apache.spark.streaming.StateSpec;
 import org.apache.spark.streaming.api.java.JavaDStream;
@@ -126,11 +126,8 @@ public class StateSpecFunctions {
     Partitioner partitioner = pairDStreamFunctions.defaultPartitioner(defaultNumPartitions);
 
     //TODO: this is probably not resilient..
-    final Accumulator<NamedAggregators> accumulator = AccumulatorSingleton.getInstance(
-        new JavaSparkContext(pairDStreamFunctions.ssc().sc()));
-
-    //TODO: obtain from holder
-    final Broadcast<Instant> globalWatermark = null;
+    JavaSparkContext jsc = new JavaSparkContext(pairDStreamFunctions.ssc().sc());
+    final Accumulator<NamedAggregators> accumulator = AccumulatorSingleton.getInstance(jsc);
 
     DStream<Tuple2<K, Tuple2<Table<String, String, byte[]>, Option<Iterable<InputT>>>>>
         outputStateStream = pairDStreamFunctions
@@ -173,7 +170,7 @@ public class StateSpecFunctions {
             GroupAlsoByWindowsDoFn.DROPPED_DUE_TO_LATENESS_COUNTER,
             Sum.ofLongs());
         final SparkTimerInternals timerInternals = new SparkTimerInternals(
-            globalWatermark.getValue());
+            GlobalWatermarkHolder.get());
 
         AbstractIterator<
             Tuple2<K, Tuple2<Table<String, String, byte[]>, Option<Iterable<InputT>>>>> outIter =

@@ -21,6 +21,7 @@ import javax.annotation.Nullable;
 import org.apache.beam.sdk.util.TimeDomain;
 import org.apache.beam.sdk.util.TimerInternals;
 import org.apache.beam.sdk.util.state.StateNamespace;
+import org.apache.spark.broadcast.Broadcast;
 import org.joda.time.Instant;
 
 
@@ -28,10 +29,10 @@ import org.joda.time.Instant;
  * An implementation of {@link TimerInternals} for the SparkRunner.
  */
 class SparkTimerInternals implements TimerInternals {
-  private final Instant watermark;
+  @Nullable private final Broadcast<Instant> watermarkBroadcast;
 
-  SparkTimerInternals(Instant watermark) {
-    this.watermark = watermark;
+  SparkTimerInternals(@Nullable Broadcast<Instant> watermarkBroadcast) {
+    this.watermarkBroadcast = watermarkBroadcast;
   }
 
   @Override
@@ -63,7 +64,7 @@ class SparkTimerInternals implements TimerInternals {
 
   @Override
   public Instant currentInputWatermarkTime() {
-    return new Instant(watermark);
+    return watermarkBroadcast != null ? watermarkBroadcast.getValue() : new Instant(Long.MIN_VALUE);
   }
 
   @Nullable

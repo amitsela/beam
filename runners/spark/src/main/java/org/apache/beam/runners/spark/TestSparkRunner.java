@@ -37,6 +37,7 @@ import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
+import org.joda.time.Duration;
 
 
 /**
@@ -64,11 +65,13 @@ public final class TestSparkRunner extends PipelineRunner<SparkPipelineResult> {
 
   private SparkRunner delegate;
   private boolean isForceStreaming;
+  private long timeout;
   private int expectedNumberOfAssertions = 0;
 
   private TestSparkRunner(SparkPipelineOptions options) {
     this.delegate = SparkRunner.fromOptions(options);
     this.isForceStreaming = options.isForceStreaming();
+    this.timeout = options.getForcedTimeout();
   }
 
   public static TestSparkRunner fromOptions(PipelineOptions options) {
@@ -84,7 +87,7 @@ public final class TestSparkRunner extends PipelineRunner<SparkPipelineResult> {
   @SuppressWarnings("unchecked")
   @Override
   public <OutputT extends POutput, InputT extends PInput> OutputT apply(
-          PTransform<InputT, OutputT> transform, InputT input) {
+      PTransform<InputT, OutputT> transform, InputT input) {
     // if the pipeline forces execution as a streaming pipeline,
     // and the source is an adapted unbounded source (as bounded),
     // read it as unbounded source via UnboundedReadFromBoundedSource.
@@ -107,7 +110,7 @@ public final class TestSparkRunner extends PipelineRunner<SparkPipelineResult> {
   public SparkPipelineResult run(Pipeline pipeline) {
     TestPipelineOptions testPipelineOptions = pipeline.getOptions().as(TestPipelineOptions.class);
     SparkPipelineResult result = delegate.run(pipeline);
-    result.waitUntilFinish();
+    result.waitUntilFinish(Duration.millis(timeout));
 
     // make sure the test pipeline finished successfully.
     State resultState = result.getState();

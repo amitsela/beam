@@ -24,11 +24,13 @@ import org.apache.beam.runners.spark.SparkPipelineOptions;
 import org.apache.beam.runners.spark.coders.CoderHelpers;
 import org.apache.beam.runners.spark.stateful.StateSpecFunctions;
 import org.apache.beam.runners.spark.translation.SparkRuntimeContext;
+import org.apache.beam.runners.spark.util.GlobalWatermarkHolder;
 import org.apache.beam.sdk.io.Source;
 import org.apache.beam.sdk.io.UnboundedSource;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.JavaSparkContext$;
 import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.Function;
@@ -173,7 +175,7 @@ public class SparkUnboundedSource {
       // compute parent.
       scala.Option<RDD<Metadata>> parentRDDOpt = parent.getOrCompute(validTime);
       long count = 0;
-      Instant globalWatermark = new Instant(Long.MIN_VALUE);
+      Instant globalWatermark = GlobalWatermarkHolder.getValue();
       if (parentRDDOpt.isDefined()) {
         JavaRDD<Metadata> parentRDD = parentRDDOpt.get().toJavaRDD();
         for (Metadata metadata: parentRDD.collect()) {
@@ -182,6 +184,9 @@ public class SparkUnboundedSource {
           globalWatermark = globalWatermark.isBefore(metadata.getWatermark())
               ? metadata.getWatermark() : globalWatermark;
         }
+        // update watermark.
+        JavaSparkContext jsc = JavaSparkContext.fromSparkContext(parentRDD.context());
+        GlobalWatermarkHolder.update(jsc, globalWatermark);
       }
       // report - for RateEstimator and visibility.
       report(validTime, count, globalWatermark);
