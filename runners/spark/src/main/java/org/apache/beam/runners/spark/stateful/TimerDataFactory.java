@@ -27,15 +27,12 @@ import org.joda.time.Instant;
 /**
  * A dummy {@link org.apache.beam.sdk.util.TimerInternals.TimerData}.
  */
-public class DummyTimerData {
+public class TimerDataFactory {
 
-  private static final TimerInternals.TimerData INSTANCE =
-      TimerInternals.TimerData.of(
-          StateNamespaces.window(GlobalWindow.Coder.INSTANCE, GlobalWindow.INSTANCE),
-          Instant.now() /* doesn't matter when */,
-          TimeDomain.PROCESSING_TIME /* doesn't matter which domain */);
-
-  public static TimerInternals.TimerData get() {
-    return INSTANCE;
+  public static TimerInternals.TimerData forWatermark(Instant watermark) {
+    return TimerInternals.TimerData.of(
+        StateNamespaces.window(GlobalWindow.Coder.INSTANCE, GlobalWindow.INSTANCE),
+        watermark,
+        TimeDomain.EVENT_TIME);
   }
 }

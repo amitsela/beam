@@ -236,7 +236,9 @@ public class StateSpecFunctions {
                       }
                       // regardless of input, call timers via dummy timer.
                       try {
-                        reduceFnRunner.onTimers(Collections.singletonList(DummyTimerData.get()));
+                        reduceFnRunner.onTimers(
+                            Collections.singletonList(TimerDataFactory.forWatermark(
+                                timerInternals.currentInputWatermarkTime())));
                       } catch (Exception e) {
                         throw new RuntimeException(
                             "Failed to process ReduceFnRunner onTimer.", e);
@@ -268,18 +270,22 @@ public class StateSpecFunctions {
         .filter(new Function<Tuple2<K, Tuple2<Table<String, String, byte[]>,
             Option<Iterable<InputT>>>>, Boolean>() {
           @Override
-          public Boolean call(Tuple2<K, Tuple2<Table<String, String, byte[]>,
-              Option<Iterable<InputT>>>> tuple2Tuple2) throws Exception {
-            return tuple2Tuple2._2()._2().isDefined(); // output is defined.
+          public Boolean call(
+              Tuple2<K, Tuple2<Table<String, String, byte[]>, Option<Iterable<InputT>>>> t2)
+                  throws Exception {
+                    // filter output if defined.
+                    Option<Iterable<InputT>> iterableOption = t2._2()._2();
+                    return iterableOption.isDefined();
           }
         })
         .map(new Function<Tuple2<K, Tuple2<Table<String, String, byte[]>,
             Option<Iterable<InputT>>>>, KV<K, Iterable<InputT>>>() {
           @Override
           public KV<K, Iterable<InputT>> call(
-              Tuple2<K, Tuple2<Table<String, String, byte[]>,
-                  Option<Iterable<InputT>>>> tupleWithDefined2) throws Exception {
-            return KV.of(tupleWithDefined2._1(), tupleWithDefined2._2()._2().get());
+              Tuple2<K, Tuple2<Table<String, String, byte[]>, Option<Iterable<InputT>>>> t2)
+                  throws Exception {
+                    // drop the state since it is already persisted at this point.
+                    return KV.of(t2._1(), t2._2()._2().get());
           }
         })
         .map(WindowingHelpers.<KV<K, Iterable<InputT>>>windowFunction());

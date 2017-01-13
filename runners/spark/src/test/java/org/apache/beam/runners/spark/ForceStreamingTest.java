@@ -54,8 +54,7 @@ public class ForceStreamingTest {
     Pipeline pipeline = Pipeline.create(options);
 
     // apply the BoundedReadFromUnboundedSource.
-    @SuppressWarnings("unchecked")
-    BoundedReadFromUnboundedSource boundedRead =
+    BoundedReadFromUnboundedSource<?> boundedRead =
         Read.from(CountingSource.unbounded()).withMaxNumRecords(-1);
     //noinspection unchecked
     pipeline.apply(boundedRead);
