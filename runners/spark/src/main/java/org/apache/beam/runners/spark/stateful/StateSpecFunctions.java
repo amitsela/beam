@@ -362,21 +362,28 @@ public class StateSpecFunctions {
    * @return The appropriate {@link org.apache.spark.streaming.StateSpec} function.
    */
   public static <T, CheckpointMarkT extends UnboundedSource.CheckpointMark>
-  scala.Function3<Source<T>, scala.Option<CheckpointMarkT>, /* CheckpointMarkT */State<byte[]>,
+  scala.Function3<Source<T>, scala.Option<CheckpointMarkT>, State<Tuple2<byte[], Instant>>,
       Tuple2<Iterable<byte[]>, Metadata>> mapSourceFunction(
            final SparkRuntimeContext runtimeContext) {
 
-    return new SerializableFunction3<Source<T>, Option<CheckpointMarkT>, State<byte[]>,
+    return new SerializableFunction3<
+        Source<T>,
+        Option<CheckpointMarkT>,
+        State<Tuple2<byte[], Instant>>,
         Tuple2<Iterable<byte[]>, Metadata>>() {
 
       @Override
       public Tuple2<Iterable<byte[]>, Metadata> apply(
           Source<T> source,
           scala.Option<CheckpointMarkT> startCheckpointMark,
-          State<byte[]> state) {
+          State<Tuple2<byte[], Instant>> state) {
         // source as MicrobatchSource
         MicrobatchSource<T, CheckpointMarkT> microbatchSource =
             (MicrobatchSource<T, CheckpointMarkT>) source;
+
+        // this is the default/start watermark.
+        // following reads will update the previous end-of-read watermark from checkpoint.
+        Instant watermark = new Instant(BoundedWindow.TIMESTAMP_MIN_VALUE);
 
         // if state exists, use it, otherwise it's first time so use the startCheckpointMark.
         // startCheckpointMark may be EmptyCheckpointMark (the Spark Java API tries to apply
@@ -384,7 +391,8 @@ public class StateSpecFunctions {
         Coder<CheckpointMarkT> checkpointCoder = microbatchSource.getCheckpointMarkCoder();
         CheckpointMarkT checkpointMark;
         if (state.exists()) {
-          checkpointMark = CoderHelpers.fromByteArray(state.get(), checkpointCoder);
+          watermark = state.get()._2();
+          checkpointMark = CoderHelpers.fromByteArray(state.get()._1(), checkpointCoder);
           LOG.info("Continue reading from an existing CheckpointMark.");
         } else if (startCheckpointMark.isDefined()
             && !startCheckpointMark.get().equals(EmptyCheckpointMark.get())) {
@@ -406,7 +414,7 @@ public class StateSpecFunctions {
 
         // read microbatch as a serialized collection.
         final List<byte[]> readValues = new ArrayList<>();
-        final Instant watermark;
+        final Instant updatedWatermark;
         WindowedValue.FullWindowedValueCoder<T> coder =
             WindowedValue.FullWindowedValueCoder.of(
                 source.getDefaultOutputCoder(),
@@ -422,21 +430,24 @@ public class StateSpecFunctions {
             finished = !reader.advance();
           }
 
-          watermark = ((MicrobatchSource.Reader) reader).getWatermark();
+          updatedWatermark = ((MicrobatchSource.Reader) reader).getWatermark();
           // close and checkpoint reader.
           reader.close();
           LOG.info("Source id {} spent {} msec on reading.", microbatchSource.getId(),
               stopwatch.stop().elapsed(TimeUnit.MILLISECONDS));
 
-          // if the Source does not supply a CheckpointMark skip updating the state.
+          // if the Source does not supply a CheckpointMark skip updating the checkpoint mark.
           @SuppressWarnings("unchecked")
           CheckpointMarkT finishedReadCheckpointMark =
               (CheckpointMarkT) ((MicrobatchSource.Reader) reader).getCheckpointMark();
+          byte[] codedCheckpoint = new byte[0];
           if (finishedReadCheckpointMark != null) {
-            state.update(CoderHelpers.toByteArray(finishedReadCheckpointMark, checkpointCoder));
+            codedCheckpoint = CoderHelpers.toByteArray(finishedReadCheckpointMark, checkpointCoder);
           } else {
             LOG.info("Skipping checkpoint marking because the reader failed to supply one.");
           }
+          // persist the end-of-read watermark for following read.
+          state.update(new Tuple2<>(codedCheckpoint, updatedWatermark));
         } catch (IOException e) {
           throw new RuntimeException("Failed to read from reader.", e);
         }

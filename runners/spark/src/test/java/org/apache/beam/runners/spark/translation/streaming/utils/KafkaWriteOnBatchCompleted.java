@@ -33,7 +33,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Write to Kafka once the OnBatchCompleted hook is activated.
  */
-public class KafkaWriteOnBatchCompleted extends JavaStreamingListener{
+public class KafkaWriteOnBatchCompleted extends JavaStreamingListener {
   private static final Logger LOG = LoggerFactory.getLogger(KafkaWriteOnBatchCompleted.class);
 
   private final Map<String, String> messages;

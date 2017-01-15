@@ -84,7 +84,7 @@ public class SparkUnboundedSource {
                 JavaSparkContext$.MODULE$.<CheckpointMarkT>fakeClassTag());
 
     // call mapWithState to read from a checkpointable sources.
-    JavaMapWithStateDStream<Source<T>, CheckpointMarkT, byte[],
+    JavaMapWithStateDStream<Source<T>, CheckpointMarkT, Tuple2<byte[], Instant>,
         Tuple2<Iterable<byte[]>, Metadata>> mapWithStateDStream = inputDStream.mapWithState(
             StateSpec.function(StateSpecFunctions.<T, CheckpointMarkT>mapSourceFunction(rc)));
 
