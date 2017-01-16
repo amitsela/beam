@@ -233,12 +233,15 @@ public class StateSpecFunctions {
                           throw new RuntimeException(
                               "Failed to process element with ReduceFnRunner", e);
                         }
+                      } else if (stateInternals.getState().isEmpty()) {
+                        // no input and no state -> GC evict now.
+                        continue;
                       }
-                      // regardless of input, call timers via dummy timer.
+                      // call on timers with high watermark - since we're done processing.
                       try {
                         reduceFnRunner.onTimers(
                             Collections.singletonList(TimerDataFactory.forWatermark(
-                                timerInternals.currentInputWatermarkTime())));
+                                timerInternals.currentHighWatermark())));
                       } catch (Exception e) {
                         throw new RuntimeException(
                             "Failed to process ReduceFnRunner onTimer.", e);
@@ -381,9 +384,9 @@ public class StateSpecFunctions {
         MicrobatchSource<T, CheckpointMarkT> microbatchSource =
             (MicrobatchSource<T, CheckpointMarkT>) source;
 
-        // this is the default/start watermark.
-        // following reads will update the previous end-of-read watermark from checkpoint.
-        Instant watermark = new Instant(BoundedWindow.TIMESTAMP_MIN_VALUE);
+        // Initial high/low watermarks.
+        Instant lowWatermark = BoundedWindow.TIMESTAMP_MIN_VALUE;
+        Instant highWatermark;
 
         // if state exists, use it, otherwise it's first time so use the startCheckpointMark.
         // startCheckpointMark may be EmptyCheckpointMark (the Spark Java API tries to apply
@@ -391,7 +394,8 @@ public class StateSpecFunctions {
         Coder<CheckpointMarkT> checkpointCoder = microbatchSource.getCheckpointMarkCoder();
         CheckpointMarkT checkpointMark;
         if (state.exists()) {
-          watermark = state.get()._2();
+          // previous (output) watermark is now the low watermark.
+          lowWatermark = state.get()._2();
           checkpointMark = CoderHelpers.fromByteArray(state.get()._1(), checkpointCoder);
           LOG.info("Continue reading from an existing CheckpointMark.");
         } else if (startCheckpointMark.isDefined()
@@ -414,7 +418,6 @@ public class StateSpecFunctions {
 
         // read microbatch as a serialized collection.
         final List<byte[]> readValues = new ArrayList<>();
-        final Instant updatedWatermark;
         WindowedValue.FullWindowedValueCoder<T> coder =
             WindowedValue.FullWindowedValueCoder.of(
                 source.getDefaultOutputCoder(),
@@ -430,7 +433,8 @@ public class StateSpecFunctions {
             finished = !reader.advance();
           }
 
-          updatedWatermark = ((MicrobatchSource.Reader) reader).getWatermark();
+          // end-of-read watermark is the high watermark.
+          highWatermark = ((MicrobatchSource.Reader) reader).getWatermark();
           // close and checkpoint reader.
           reader.close();
           LOG.info("Source id {} spent {} msec on reading.", microbatchSource.getId(),
@@ -446,8 +450,9 @@ public class StateSpecFunctions {
           } else {
             LOG.info("Skipping checkpoint marking because the reader failed to supply one.");
           }
-          // persist the end-of-read watermark for following read.
-          state.update(new Tuple2<>(codedCheckpoint, updatedWatermark));
+          // persist the end-of-read (high) watermark for following read, where it will become
+          // the next low watermark.
+          state.update(new Tuple2<>(codedCheckpoint, highWatermark));
         } catch (IOException e) {
           throw new RuntimeException("Failed to read from reader.", e);
         }
@@ -458,7 +463,8 @@ public class StateSpecFunctions {
             return Iterators.unmodifiableIterator(readValues.iterator());
           }
         };
-        return new Tuple2<>(iterable, new Metadata(readValues.size(), watermark));
+        int numRecords = readValues.size();
+        return new Tuple2<>(iterable, new Metadata(numRecords, lowWatermark, highWatermark));
       }
     };
   }

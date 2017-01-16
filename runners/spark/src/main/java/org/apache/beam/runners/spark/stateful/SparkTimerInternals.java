@@ -18,6 +18,8 @@
 package org.apache.beam.runners.spark.stateful;
 
 import javax.annotation.Nullable;
+import org.apache.beam.runners.spark.util.GlobalWatermarkHolder.MicrobatchTime;
+import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.util.TimeDomain;
 import org.apache.beam.sdk.util.TimerInternals;
 import org.apache.beam.sdk.util.state.StateNamespace;
@@ -29,10 +31,10 @@ import org.joda.time.Instant;
  * An implementation of {@link TimerInternals} for the SparkRunner.
  */
 class SparkTimerInternals implements TimerInternals {
-  @Nullable private final Broadcast<Instant> watermarkBroadcast;
+  @Nullable private final Broadcast<MicrobatchTime> broadcast;
 
-  SparkTimerInternals(@Nullable Broadcast<Instant> watermarkBroadcast) {
-    this.watermarkBroadcast = watermarkBroadcast;
+  SparkTimerInternals(@Nullable Broadcast<MicrobatchTime> broadcast) {
+    this.broadcast = broadcast;
   }
 
   @Override
@@ -58,19 +60,27 @@ class SparkTimerInternals implements TimerInternals {
   @Nullable
   @Override
   public Instant currentSynchronizedProcessingTime() {
-    //TODO: would be nice to use Spark's inner clock, maybe through batchTime ?
-    return null;
+    return broadcast != null ? broadcast.getValue().getSynchronizedProcessingTime()
+        : BoundedWindow.TIMESTAMP_MIN_VALUE;
   }
 
   @Override
   public Instant currentInputWatermarkTime() {
-    return watermarkBroadcast != null ? watermarkBroadcast.getValue() : new Instant(Long.MIN_VALUE);
+    return broadcast == null ? BoundedWindow.TIMESTAMP_MIN_VALUE
+        : broadcast.getValue().getLowWatermark();
+  }
+
+  /**
+   * Returns the "high" watermark, representing the microbatch global end-of-read watermark.
+   */
+  public Instant currentHighWatermark() {
+    return broadcast == null ? BoundedWindow.TIMESTAMP_MIN_VALUE
+        : broadcast.getValue().getHighWatermark();
   }
 
   @Nullable
   @Override
   public Instant currentOutputWatermarkTime() {
-    // TODO
     return null;
   }
 

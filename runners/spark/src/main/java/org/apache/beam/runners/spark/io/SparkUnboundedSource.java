@@ -27,10 +27,10 @@ import org.apache.beam.runners.spark.translation.SparkRuntimeContext;
 import org.apache.beam.runners.spark.util.GlobalWatermarkHolder;
 import org.apache.beam.sdk.io.Source;
 import org.apache.beam.sdk.io.UnboundedSource;
+import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.spark.api.java.JavaRDD;
-import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.JavaSparkContext$;
 import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.Function;
@@ -175,33 +175,49 @@ public class SparkUnboundedSource {
       // compute parent.
       scala.Option<RDD<Metadata>> parentRDDOpt = parent.getOrCompute(validTime);
       long count = 0;
-      Instant globalWatermark = GlobalWatermarkHolder.getValue();
+      Instant globalLowWatermarkForBatch = BoundedWindow.TIMESTAMP_MIN_VALUE;
+      Instant globalHighWatermarkForBatch = BoundedWindow.TIMESTAMP_MIN_VALUE;
       if (parentRDDOpt.isDefined()) {
         JavaRDD<Metadata> parentRDD = parentRDDOpt.get().toJavaRDD();
         for (Metadata metadata: parentRDD.collect()) {
           count += metadata.getNumRecords();
-          // a monotonically increasing watermark.
-          globalWatermark = globalWatermark.isBefore(metadata.getWatermark())
-              ? metadata.getWatermark() : globalWatermark;
+          // compute the global input watermark - advance to latest of all partitions.
+          Instant partitionLowWatermark = metadata.getLowWatermark();
+          globalLowWatermarkForBatch =
+              globalLowWatermarkForBatch.isBefore(partitionLowWatermark)
+                  ? partitionLowWatermark : globalLowWatermarkForBatch;
+          Instant partitionHighWatermark = metadata.getHighWatermark();
+          globalHighWatermarkForBatch =
+              globalHighWatermarkForBatch.isBefore(partitionHighWatermark)
+                  ? partitionHighWatermark : globalHighWatermarkForBatch;
         }
-        // update watermark.
-        JavaSparkContext jsc = JavaSparkContext.fromSparkContext(parentRDD.context());
-        GlobalWatermarkHolder.update(jsc, globalWatermark);
+        // add to watermark queue.
+        GlobalWatermarkHolder.add(
+            inputDStreamId,
+            globalLowWatermarkForBatch,
+            globalHighWatermarkForBatch,
+            validTime);
       }
       // report - for RateEstimator and visibility.
-      report(validTime, count, globalWatermark);
+      report(validTime, count, globalLowWatermarkForBatch, globalHighWatermarkForBatch);
       return scala.Option.empty();
     }
 
-    private void report(Time batchTime, long count, Instant watermark) {
+    private void report(
+        Time batchTime,
+        long count,
+        Instant lowWatermark,
+        Instant highWatermark) {
       // metadata - #records read and a description.
       scala.collection.immutable.Map<String, Object> metadata =
           new scala.collection.immutable.Map.Map1<String, Object>(
               StreamInputInfo.METADATA_KEY_DESCRIPTION(),
               String.format(
-                  "Read %d records with observed watermark %s, from %s for batch time: %s",
+                  "Read %d records with observed low/high watermarks of {%s, %s}, " +
+                      "from %s for batch time: %s",
                   count,
-                  watermark,
+                  lowWatermark,
+                  highWatermark,
                   sourceName,
                   batchTime));
       StreamInputInfo streamInputInfo = new StreamInputInfo(inputDStreamId, count, metadata);
@@ -214,19 +230,25 @@ public class SparkUnboundedSource {
    */
   public static class Metadata implements Serializable {
     private final long numRecords;
-    private final Instant watermark;
+    private final Instant lowWatermark;
+    private final Instant highWatermark;
 
-    public Metadata(long numRecords, Instant watermark) {
+    public Metadata(long numRecords, Instant lowWatermark, Instant highWatermark) {
       this.numRecords = numRecords;
-      this.watermark = watermark;
+      this.lowWatermark = lowWatermark;
+      this.highWatermark = highWatermark;
     }
 
     public long getNumRecords() {
       return numRecords;
     }
 
-    public Instant getWatermark() {
-      return watermark;
+    public Instant getLowWatermark() {
+      return lowWatermark;
+    }
+
+    public Instant getHighWatermark() {
+      return highWatermark;
     }
   }
 }
