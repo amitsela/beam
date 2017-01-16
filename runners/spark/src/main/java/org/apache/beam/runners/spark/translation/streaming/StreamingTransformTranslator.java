@@ -26,6 +26,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
+import java.util.concurrent.LinkedBlockingQueue;
 import org.apache.beam.runners.spark.aggregators.NamedAggregators;
 import org.apache.beam.runners.spark.aggregators.SparkAggregators;
 import org.apache.beam.runners.spark.coders.CoderHelpers;
@@ -134,33 +136,23 @@ final class StreamingTransformTranslator {
         // since this is a streaming pipeline, at least one of the PCollections to "flatten" are
         // unbounded, meaning it represents a DStream.
         // So we could end up with an unbounded unified DStream.
-        final List<JavaRDD<WindowedValue<T>>> rdds = new ArrayList<>();
         final List<JavaDStream<WindowedValue<T>>> dStreams = new ArrayList<>();
         for (PCollection<T> pcol : pcs.getAll()) {
          Dataset dataset = context.borrowDataset(pcol);
           if (dataset instanceof UnboundedDataset) {
             dStreams.add(((UnboundedDataset<T>) dataset).getDStream());
           } else {
-            rdds.add(((BoundedDataset<T>) dataset).getRDD());
+            // create a single RDD stream.
+            Queue<JavaRDD<WindowedValue<T>>> q = new LinkedBlockingQueue<>();
+            q.offer(((BoundedDataset) dataset).getRDD());
+            JavaDStream<WindowedValue<T>> dStream = context.getStreamingContext().queueStream(q);
+            dStreams.add(dStream);
           }
         }
         // start by unifying streams into a single stream.
         JavaDStream<WindowedValue<T>> unifiedStreams =
             context.getStreamingContext().union(dStreams.remove(0), dStreams);
-        // now unify in RDDs.
-        if (rdds.size() > 0) {
-          JavaDStream<WindowedValue<T>> joined = unifiedStreams.transform(
-              new Function<JavaRDD<WindowedValue<T>>, JavaRDD<WindowedValue<T>>>() {
-            @Override
-            public JavaRDD<WindowedValue<T>> call(JavaRDD<WindowedValue<T>> streamRdd)
-                throws Exception {
-              return new JavaSparkContext(streamRdd.context()).union(streamRdd, rdds);
-            }
-          });
-          context.putDataset(transform, new UnboundedDataset<>(joined));
-        } else {
-          context.putDataset(transform, new UnboundedDataset<>(unifiedStreams));
-        }
+        context.putDataset(transform, new UnboundedDataset<>(unifiedStreams));
       }
     };
   }
