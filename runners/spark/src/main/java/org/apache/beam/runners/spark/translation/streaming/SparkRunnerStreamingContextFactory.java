@@ -27,12 +27,14 @@ import org.apache.beam.runners.spark.translation.EvaluationContext;
 import org.apache.beam.runners.spark.translation.SparkContextFactory;
 import org.apache.beam.runners.spark.translation.SparkPipelineTranslator;
 import org.apache.beam.runners.spark.translation.TransformTranslator;
+import org.apache.beam.runners.spark.util.GlobalWatermarkHolder;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.streaming.Duration;
 import org.apache.spark.streaming.api.java.JavaStreamingContext;
 import org.apache.spark.streaming.api.java.JavaStreamingContextFactory;
 import org.apache.spark.streaming.api.java.JavaStreamingListener;
+import org.apache.spark.streaming.api.java.JavaStreamingListenerBatchCompleted;
 import org.apache.spark.streaming.api.java.JavaStreamingListenerWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,7 +74,7 @@ public class SparkRunnerStreamingContextFactory implements JavaStreamingContextF
     LOG.info("Setting Spark streaming batchDuration to {} msec", batchDuration.milliseconds());
 
     JavaSparkContext jsc = SparkContextFactory.getSparkContext(options);
-    JavaStreamingContext jssc = new JavaStreamingContext(jsc, batchDuration);
+    final JavaStreamingContext jssc = new JavaStreamingContext(jsc, batchDuration);
     ctxt = new EvaluationContext(jsc, pipeline, jssc);
     pipeline.traverseTopologically(new SparkRunner.Evaluator(translator, ctxt));
     ctxt.computeOutputs();
@@ -86,7 +88,17 @@ public class SparkRunnerStreamingContextFactory implements JavaStreamingContextF
     LOG.info("Checkpoint dir set to: {}", checkpointDir);
     jssc.checkpoint(checkpointDir);
 
-    // register listeners.
+    //register microbatch-time listener.
+    jssc.addStreamingListener(new JavaStreamingListenerWrapper(new JavaStreamingListener() {
+
+      @Override
+      public void onBatchCompleted(JavaStreamingListenerBatchCompleted batchCompleted) {
+        GlobalWatermarkHolder.advance(jssc.sparkContext());
+      }
+
+    }));
+
+    // register user-defined listeners.
     for (JavaStreamingListener listener: options.as(SparkContextOptions.class).getListeners()) {
       LOG.info("Registered listener {}." + listener.getClass().getSimpleName());
       jssc.addStreamingListener(new JavaStreamingListenerWrapper(listener));
