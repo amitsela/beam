@@ -40,7 +40,7 @@ public interface SparkPipelineOptions
   void setSparkMaster(String master);
 
   @Description("Batch interval for Spark streaming in milliseconds.")
-  @Default.Long(1000)
+  @Default.Long(500)
   Long getBatchIntervalMillis();
   void setBatchIntervalMillis(Long batchInterval);
 
@@ -107,7 +107,7 @@ public interface SparkPipelineOptions
   void setForceStreaming(boolean forceStreaming);
 
   @Description("A forced timeout (millis), mostly for testing.")
-  @Default.Long(5000L)
+  @Default.Long(3000L)
   Long getForcedTimeout();
   void setForcedTimeout(Long forcedTimeout);
 }

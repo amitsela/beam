@@ -45,7 +45,7 @@ public class AccumulatorSingleton {
   }
 
   @VisibleForTesting
-  static void clear() {
+  public static void clear() {
     synchronized (AccumulatorSingleton.class) {
       instance = null;
     }

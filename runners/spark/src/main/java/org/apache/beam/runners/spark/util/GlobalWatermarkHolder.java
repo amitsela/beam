@@ -20,6 +20,7 @@ package org.apache.beam.runners.spark.util;
 
 import static com.google.common.base.Preconditions.checkState;
 
+import com.google.common.annotations.VisibleForTesting;
 import java.io.Serializable;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -90,6 +91,15 @@ public class GlobalWatermarkHolder {
               nextLowWatermark,
               nextHighWatermark,
               nextSynchronizedProcessingTime));
+    }
+  }
+
+  @VisibleForTesting
+  public static synchronized void clear() {
+    queue.clear();
+    if (broadcast != null) {
+      broadcast.destroy(true);
+      broadcast = null;
     }
   }
 

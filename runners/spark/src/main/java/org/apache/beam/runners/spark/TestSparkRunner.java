@@ -25,6 +25,8 @@ import java.io.File;
 import java.io.IOException;
 
 import org.apache.beam.runners.core.UnboundedReadFromBoundedSource;
+import org.apache.beam.runners.spark.aggregators.AccumulatorSingleton;
+import org.apache.beam.runners.spark.util.GlobalWatermarkHolder;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.BoundedReadFromUnboundedSource;
 import org.apache.beam.sdk.options.PipelineOptions;
@@ -136,6 +138,9 @@ public final class TestSparkRunner extends PipelineRunner<SparkPipelineResult> {
         assertThat("Failure aggregator should be zero.", failure, is(0));
       }
     } finally {
+      // clear watermark holder after each run.
+      GlobalWatermarkHolder.clear();
+      AccumulatorSingleton.clear();
       try {
         FileUtils.deleteDirectory(new File(sparkOptions.getCheckpointDir()));
       } catch (IOException e) {

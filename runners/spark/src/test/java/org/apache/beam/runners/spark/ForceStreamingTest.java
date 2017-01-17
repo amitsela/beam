@@ -76,7 +76,7 @@ public class ForceStreamingTest {
     @Override
     public void visitPrimitiveTransform(TransformHierarchy.Node node) {
       Class<? extends PTransform> transformClass = node.getTransform().getClass();
-      if (transformClass == Read.Unbounded.class) {
+      if (Read.Unbounded.class.equals(transformClass)) {
         isUnbounded = true;
       }
     }
