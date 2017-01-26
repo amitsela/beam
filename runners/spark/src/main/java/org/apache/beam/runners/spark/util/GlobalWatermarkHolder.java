@@ -65,6 +65,9 @@ public class GlobalWatermarkHolder {
    */
   public static void advance(JavaSparkContext jsc) {
     synchronized (GlobalWatermarkHolder.class){
+      if (queue.isEmpty()) {
+        return;
+      }
       Instant currentLowWatermark = BoundedWindow.TIMESTAMP_MIN_VALUE;
       Instant currentHighWatermark = BoundedWindow.TIMESTAMP_MIN_VALUE;
       Instant currentSynchronizedProcessingTime = BoundedWindow.TIMESTAMP_MIN_VALUE;
