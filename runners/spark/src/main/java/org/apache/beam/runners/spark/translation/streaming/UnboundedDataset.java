@@ -45,7 +45,7 @@ public class UnboundedDataset<T> implements Dataset {
   // only set if creating a DStream from a static collection
   @Nullable private transient JavaStreamingContext jssc;
 
-  private Iterable<Iterable<T>> values;
+  private Queue<Iterable<T>> values;
   private Coder<T> coder;
   private JavaDStream<WindowedValue<T>> dStream;
 
@@ -53,7 +53,7 @@ public class UnboundedDataset<T> implements Dataset {
     this.dStream = dStream;
   }
 
-  public UnboundedDataset(Iterable<Iterable<T>> values, JavaStreamingContext jssc, Coder<T> coder) {
+  public UnboundedDataset(Queue<Iterable<T>> values, JavaStreamingContext jssc, Coder<T> coder) {
     this.values = values;
     this.jssc = jssc;
     this.coder = coder;
@@ -64,24 +64,20 @@ public class UnboundedDataset<T> implements Dataset {
     if (dStream == null) {
       WindowedValue.ValueOnlyWindowedValueCoder<T> windowCoder =
           WindowedValue.getValueOnlyCoder(coder);
-      // create the DStream from queue
+      // create an RDD queue.
       Queue<JavaRDD<WindowedValue<T>>> rddQueue = new LinkedBlockingQueue<>();
-      JavaRDD<WindowedValue<T>> lastRDD = null;
-      for (Iterable<T> v : values) {
+      while (!values.isEmpty()) {
+        Iterable<T> v = values.poll();
         Iterable<WindowedValue<T>> windowedValues =
             Iterables.transform(v, WindowingHelpers.<T>windowValueFunction());
         JavaRDD<WindowedValue<T>> rdd = jssc.sc().parallelize(
             CoderHelpers.toByteArrays(windowedValues, windowCoder)).map(
             CoderHelpers.fromByteFunction(windowCoder));
         rddQueue.offer(rdd);
-        lastRDD = rdd;
       }
-      // create DStream from queue, one at a time,
-      // with last as default in case batches repeat (graceful stops for example).
-      // if the stream is empty, avoid creating a default empty RDD.
-      // mainly for unit test so no reason to have this configurable.
-      dStream = lastRDD != null ? jssc.queueStream(rddQueue, true, lastRDD)
-          : jssc.queueStream(rddQueue, true);
+
+      // create the DStream from queue
+      dStream = jssc.queueStream(rddQueue, true);
     }
     return dStream;
   }

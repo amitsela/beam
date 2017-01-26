@@ -24,10 +24,7 @@ import static org.hamcrest.Matchers.nullValue;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.fail;
 
-import com.google.common.collect.Lists;
 import java.io.Serializable;
-import java.util.Arrays;
-import java.util.List;
 import org.apache.beam.runners.spark.io.CreateStream;
 import org.apache.beam.runners.spark.translation.streaming.utils.SparkTestPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
@@ -66,11 +63,6 @@ public class SparkPipelineStateTest implements Serializable {
 
   private static final String FAILED_THE_BATCH_INTENTIONALLY = "Failed the batch intentionally";
 
-  private static final List<String> BATCH_WORDS = Arrays.asList("one", "two");
-
-  private static final List<Iterable<String>> STREAMING_WORDS =
-      Lists.<Iterable<String>>newArrayList(BATCH_WORDS);
-
   private ParDo.Bound<String, String> printParDo(final String prefix) {
     return ParDo.of(new DoFn<String, String>() {
 
@@ -83,8 +75,8 @@ public class SparkPipelineStateTest implements Serializable {
 
   private PTransform<PBegin, PCollection<String>> getValues(final SparkPipelineOptions options) {
     return options.isStreaming()
-        ? CreateStream.fromQueue(STREAMING_WORDS)
-        : Create.of(BATCH_WORDS);
+        ? CreateStream.withFirstBatch("one", "two")
+        : Create.of("one", "two");
   }
 
   private SparkPipelineOptions getStreamingOptions() {

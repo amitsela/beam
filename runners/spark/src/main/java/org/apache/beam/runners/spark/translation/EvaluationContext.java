@@ -24,6 +24,7 @@ import com.google.common.collect.Iterables;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Queue;
 import java.util.Set;
 import org.apache.beam.runners.spark.SparkPipelineOptions;
 import org.apache.beam.runners.spark.translation.streaming.UnboundedDataset;
@@ -119,13 +120,13 @@ public class EvaluationContext {
     leaves.add(dataset);
   }
 
-  <T> void putBoundedDatasetFromValues(PTransform<?, ?> transform, Iterable<T> values,
-                                       Coder<T> coder) {
+  <T> void putBoundedDatasetFromValues(
+      PTransform<?, ?> transform, Iterable<T> values, Coder<T> coder) {
     datasets.put((PValue) getOutput(transform), new BoundedDataset<>(values, jsc, coder));
   }
 
   public <T> void putUnboundedDatasetFromQueue(
-      PTransform<?, ?> transform, Iterable<Iterable<T>> values, Coder<T> coder) {
+      PTransform<?, ?> transform, Queue<Iterable<T>> values, Coder<T> coder) {
     datasets.put((PValue) getOutput(transform), new UnboundedDataset<>(values, jssc, coder));
   }
 

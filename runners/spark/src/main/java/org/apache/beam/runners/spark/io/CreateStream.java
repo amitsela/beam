@@ -17,57 +17,45 @@
  */
 package org.apache.beam.runners.spark.io;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
+import java.util.Arrays;
+import java.util.LinkedList;
+import java.util.Queue;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 
+
 /**
- * Create an input stream from Queue.
+ * Create an input stream from Queue. For SparkRunner tests only.
  *
  * @param <T> stream type
  */
-public final class CreateStream<T> {
+public final class CreateStream<T> extends PTransform<PBegin, PCollection<T>> {
 
-  private CreateStream() {
+  private final Queue<Iterable<T>> queuedValues = new LinkedList<>();
+
+  private CreateStream(Iterable<T> first) {
+    queuedValues.offer(first);
   }
 
-  /**
-   * Define the input stream to create from queue.
-   *
-   * @param queuedValues  defines the input stream
-   * @param <T>           stream type
-   * @return the queue that defines the input stream
-   */
-  public static <T> QueuedValues<T> fromQueue(Iterable<Iterable<T>> queuedValues) {
-    return new QueuedValues<>(queuedValues);
+  @SafeVarargs
+  public static <T> CreateStream<T> withFirstBatch(T... batchValues) {
+    return new CreateStream<>(Arrays.asList(batchValues));
   }
 
-  /**
-   * {@link PTransform} for queueing values.
-   */
-  public static final class QueuedValues<T> extends PTransform<PBegin, PCollection<T>> {
-
-    private final Iterable<Iterable<T>> queuedValues;
-
-    QueuedValues(Iterable<Iterable<T>> queuedValues) {
-      checkNotNull(
-          queuedValues, "need to set the queuedValues of an Create.QueuedValues transform");
-      this.queuedValues = queuedValues;
-    }
-
-    public Iterable<Iterable<T>> getQueuedValues() {
-      return queuedValues;
-    }
-
-    @Override
-    public PCollection<T> expand(PBegin input) {
-      // Spark streaming micro batches are bounded by default
-      return PCollection.createPrimitiveOutputInternal(input.getPipeline(),
-          WindowingStrategy.globalDefault(), PCollection.IsBounded.UNBOUNDED);
-    }
+  public CreateStream<T> followedBy(T... batchValues) {
+    queuedValues.offer(Arrays.asList(batchValues));
+    return this;
   }
 
+  public Queue<Iterable<T>> getQueuedValues() {
+    return queuedValues;
+  }
+
+  @Override
+  public PCollection<T> expand(PBegin input) {
+    return PCollection.createPrimitiveOutputInternal(
+        input.getPipeline(), WindowingStrategy.globalDefault(), PCollection.IsBounded.UNBOUNDED);
+  }
 }
