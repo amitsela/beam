@@ -20,6 +20,7 @@ package org.apache.beam.runners.spark.translation.streaming;
 import static com.google.common.base.Preconditions.checkState;
 import static org.apache.beam.runners.spark.translation.TranslationUtils.rejectStateAndTimers;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import java.util.ArrayList;
@@ -27,6 +28,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import org.apache.beam.runners.spark.aggregators.NamedAggregators;
 import org.apache.beam.runners.spark.aggregators.SparkAggregators;
@@ -116,11 +118,11 @@ final class StreamingTransformTranslator {
     };
   }
 
-  private static <T> TransformEvaluator<CreateStream.QueuedValues<T>> createFromQueue() {
-    return new TransformEvaluator<CreateStream.QueuedValues<T>>() {
+  private static <T> TransformEvaluator<CreateStream<T>> createFromQueue() {
+    return new TransformEvaluator<CreateStream<T>>() {
       @Override
-      public void evaluate(CreateStream.QueuedValues<T> transform, EvaluationContext context) {
-        Iterable<Iterable<T>> values = transform.getQueuedValues();
+      public void evaluate(CreateStream<T> transform, EvaluationContext context) {
+        Queue<Iterable<T>> values = transform.getQueuedValues();
         Coder<T> coder = context.getOutput(transform).getCoder();
         context.putUnboundedDatasetFromQueue(transform, values, coder);
       }
@@ -515,16 +517,22 @@ final class StreamingTransformTranslator {
   static {
     EVALUATORS.put(Read.Unbounded.class, readUnbounded());
     EVALUATORS.put(GroupByKey.class, groupByKey());
-//    EVALUATORS.put(Combine.GroupedValues.class, combineGrouped());
+    EVALUATORS.put(Combine.GroupedValues.class, combineGrouped());
 //    EVALUATORS.put(Combine.Globally.class, combineGlobally());
-    EVALUATORS.put(Combine.PerKey.class, combinePerKey());
+//    EVALUATORS.put(Combine.PerKey.class, combinePerKey());
     EVALUATORS.put(ParDo.Bound.class, parDo());
     EVALUATORS.put(ParDo.BoundMulti.class, multiDo());
     EVALUATORS.put(ConsoleIO.Write.Unbound.class, print());
-    EVALUATORS.put(CreateStream.QueuedValues.class, createFromQueue());
+    EVALUATORS.put(CreateStream.class, createFromQueue());
     EVALUATORS.put(Window.Bound.class, window());
     EVALUATORS.put(Flatten.FlattenPCollectionList.class, flattenPColl());
   }
+
+  //TODO: temporary, remove once
+  private static final Set<Class<? extends PTransform>> EXCLUDES =
+      ImmutableSet.of(
+          Combine.PerKey.class,
+          Combine.Globally.class);
 
   /**
    * Translator matches Beam transformation with the appropriate evaluator.
@@ -539,8 +547,9 @@ final class StreamingTransformTranslator {
 
     @Override
     public boolean hasTranslation(Class<? extends PTransform<?, ?>> clazz) {
-      // streaming includes rdd/bounded transformations as well
-      return EVALUATORS.containsKey(clazz) || batchTranslator.hasTranslation(clazz);
+      // streaming pipelines could include rdd/bounded transformations as well,
+      // in case of bounded branches in the graph.
+      return !EXCLUDES.contains(clazz) && (EVALUATORS.containsKey(clazz) || batchTranslator.hasTranslation(clazz));
     }
 
     @Override
