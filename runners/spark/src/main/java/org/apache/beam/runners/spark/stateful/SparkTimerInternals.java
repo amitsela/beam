@@ -17,6 +17,9 @@
  */
 package org.apache.beam.runners.spark.stateful;
 
+import com.google.common.collect.Sets;
+import java.util.Collection;
+import java.util.Set;
 import javax.annotation.Nullable;
 import org.apache.beam.runners.spark.util.GlobalWatermarkHolder.MicrobatchTime;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
@@ -32,14 +35,35 @@ import org.joda.time.Instant;
  */
 class SparkTimerInternals implements TimerInternals {
   @Nullable private final Broadcast<MicrobatchTime> broadcast;
+  private final Set<TimerData> timers = Sets.newHashSet();
 
   SparkTimerInternals(@Nullable Broadcast<MicrobatchTime> broadcast) {
     this.broadcast = broadcast;
   }
 
+  Collection<TimerData> getTimers() {
+    return timers;
+  }
+
+  /** This should only be called after processing the element. */
+  Collection<TimerData> getTimersReadyToProcess() {
+    Set<TimerData> toFire = Sets.newHashSet();
+    for (TimerData timer: timers) {
+      if (timer.getTimestamp().isBefore(currentHighWatermark())) {
+        toFire.add(timer);
+        timers.remove(timer);
+      }
+    }
+    return toFire;
+  }
+
+  void addTimers(Collection<TimerData> timers) {
+    this.timers.addAll(timers);
+  }
+
   @Override
   public void setTimer(TimerData timer) {
-    // do nothing.
+    this.timers.add(timer);
   }
 
   @Override
@@ -49,7 +73,7 @@ class SparkTimerInternals implements TimerInternals {
 
   @Override
   public void deleteTimer(TimerData timer) {
-    // do nothing.
+    this.timers.remove(timer);
   }
 
   @Override
@@ -73,7 +97,7 @@ class SparkTimerInternals implements TimerInternals {
   /**
    * Returns the "high" watermark, representing the microbatch global end-of-read watermark.
    */
-  public Instant currentHighWatermark() {
+  Instant currentHighWatermark() {
     return broadcast == null ? BoundedWindow.TIMESTAMP_MIN_VALUE
         : broadcast.getValue().getHighWatermark();
   }
@@ -85,10 +109,11 @@ class SparkTimerInternals implements TimerInternals {
   }
 
   @Override
-  public void setTimer(StateNamespace namespace,
-                       String timerId,
-                       Instant target,
-                       TimeDomain timeDomain) {
+  public void setTimer(
+      StateNamespace namespace,
+      String timerId,
+      Instant target,
+      TimeDomain timeDomain) {
     throw new UnsupportedOperationException("Setting a timer by ID not yet supported.");
   }
 

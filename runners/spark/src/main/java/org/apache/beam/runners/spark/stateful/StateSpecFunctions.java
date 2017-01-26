@@ -26,7 +26,6 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -57,6 +56,7 @@ import org.apache.beam.sdk.transforms.Sum;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.PaneInfo;
+import org.apache.beam.sdk.util.TimerInternals;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.KV;
@@ -129,22 +129,22 @@ public class StateSpecFunctions {
     JavaSparkContext jsc = new JavaSparkContext(pairDStreamFunctions.ssc().sc());
     final Accumulator<NamedAggregators> accumulator = AccumulatorSingleton.getInstance(jsc);
 
-    DStream<Tuple2<K, Tuple2<Table<String, String, byte[]>, Option<Iterable<InputT>>>>>
-        outputStateStream = pairDStreamFunctions
+    DStream<Tuple2<K, Tuple2<StateAndTimers, Option<Iterable<InputT>>>>> outputStateStream =
+        pairDStreamFunctions
             .updateStateByKey(
                 new SerializableFunction1<
                     /* generics look cumbersome here, but it's basically Iterator -> Iterator */
                     scala.collection.Iterator<
                         Tuple3<K, Seq<Iterable<WindowedValue<InputT>>>,
-                        Option<Tuple2<Table<String, String, byte[]>,
+                        Option<Tuple2<StateAndTimers,
                         Option<Iterable<InputT>>>>>>,
-                    scala.collection.Iterator<Tuple2<K, Tuple2<Table<String, String, byte[]>,
+                    scala.collection.Iterator<Tuple2<K, Tuple2<StateAndTimers,
                         Option<Iterable<InputT>>>>>>() {
       @Override
-      public scala.collection.Iterator<Tuple2<K, Tuple2<Table<String, String, byte[]>,
+      public scala.collection.Iterator<Tuple2<K, Tuple2<StateAndTimers,
           Option<Iterable<InputT>>>>> apply(
               final scala.collection.Iterator<Tuple3<K, Seq<Iterable<WindowedValue<InputT>>>,
-                  Option<Tuple2<Table<String, String, byte[]>, Option<Iterable<InputT>>>>>> iter) {
+                  Option<Tuple2<StateAndTimers, Option<Iterable<InputT>>>>>> iter) {
         //--- ACTUAL STATEFUL OPERATION:
         //
         // Input Iterator: the partition (~bundle) of a cogrouping of the input
@@ -169,38 +169,40 @@ public class StateSpecFunctions {
             accumulator,
             GroupAlsoByWindowsDoFn.DROPPED_DUE_TO_LATENESS_COUNTER,
             Sum.ofLongs());
-        final SparkTimerInternals timerInternals = new SparkTimerInternals(
-            GlobalWatermarkHolder.get());
 
         AbstractIterator<
-            Tuple2<K, Tuple2<Table<String, String, byte[]>, Option<Iterable<InputT>>>>> outIter =
+            Tuple2<K, Tuple2<StateAndTimers, Option<Iterable<InputT>>>>> outIter =
                 new AbstractIterator<Tuple2<K,
-                    Tuple2<Table<String, String, byte[]>, Option<Iterable<InputT>>>>>() {
+                    Tuple2<StateAndTimers, Option<Iterable<InputT>>>>>() {
                   @Override
-                  protected Tuple2<K, Tuple2<Table<String, String, byte[]>,
+                  protected Tuple2<K, Tuple2<StateAndTimers,
                       Option<Iterable<InputT>>>> computeNext() {
                     // input iterator is a Spark partition (~bundle), containing keys and their
                     // (possibly) previous-state and (possibly) new data.
                     while (iter.hasNext()) {
                       // for each element in the partition:
-                      Tuple3<K, Seq<Iterable<WindowedValue<InputT>>>, Option<Tuple2<Table<String,
-                          String, byte[]>, Option<Iterable<InputT>>>>> next = iter.next();
+                      Tuple3<K, Seq<Iterable<WindowedValue<InputT>>>, Option<Tuple2<StateAndTimers,
+                          Option<Iterable<InputT>>>>> next = iter.next();
                       K key = next._1();
 
                       Seq<Iterable<WindowedValue<InputT>>> seq = next._2();
 
-                      Option<Tuple2<Table<String, String, byte[]>,
-                          Option<Iterable<InputT>>>> prevStateOpt = next._3();
+                      Option<Tuple2<StateAndTimers,
+                          Option<Iterable<InputT>>>> prevStateAndTimersOpt = next._3();
 
                       SparkStateInternals<K> stateInternals;
+                      SparkTimerInternals timerInternals = new SparkTimerInternals(
+                          GlobalWatermarkHolder.get());
                       // get state(internals) per key.
-                      if (prevStateOpt.isEmpty()) {
+                      if (prevStateAndTimersOpt.isEmpty()) {
                         // no previous state.
                         stateInternals = SparkStateInternals.forKey(key);
                       } else {
                         // with pre-existing state.
-                        Table<String, String, byte[]> prevState = prevStateOpt.get()._1();
-                        stateInternals = SparkStateInternals.forKeyAndState(key, prevState);
+                        StateAndTimers prevStateAndTimers = prevStateAndTimersOpt.get()._1();
+                        stateInternals = SparkStateInternals.forKeyAndState(key,
+                            prevStateAndTimers.getState());
+                        timerInternals.addTimers(prevStateAndTimers.getTimers());
                       }
 
                       ReduceFnRunner<K, InputT, Iterable<InputT>, W> reduceFnRunner =
@@ -239,9 +241,7 @@ public class StateSpecFunctions {
                       }
                       // call on timers with high watermark - since we're done processing.
                       try {
-                        reduceFnRunner.onTimers(
-                            Collections.singletonList(TimerDataFactory.forWatermark(
-                                timerInternals.currentHighWatermark())));
+                        reduceFnRunner.onTimers(timerInternals.getTimersReadyToProcess());
                       } catch (Exception e) {
                         throw new RuntimeException(
                             "Failed to process ReduceFnRunner onTimer.", e);
@@ -250,9 +250,10 @@ public class StateSpecFunctions {
                       reduceFnRunner.persist();
                       Option<Iterable<InputT>> outputOpt = outputHolder.getValue();
                       if (outputOpt.isDefined() || !stateInternals.getState().isEmpty()) {
+                        StateAndTimers updated = new StateAndTimers(stateInternals.getState(),
+                            timerInternals.getTimers());
                         // persist Spark's state by outputting.
-                        return new Tuple2<>(key,
-                            new Tuple2<>(stateInternals.getState(), outputOpt));
+                        return new Tuple2<>(key, new Tuple2<>(updated, outputOpt));
                       }
                       // an empty state with no output, can be evicted completely - do nothing.
                     }
@@ -261,37 +262,54 @@ public class StateSpecFunctions {
         };
         return scala.collection.JavaConversions.asScalaIterator(outIter);
       }
-    }, partitioner, true, JavaSparkContext$.MODULE$.<Tuple2<Table<String, String, byte[]>,
-                            Option<Iterable<InputT>>>>fakeClassTag());
+    }, partitioner, true,
+        JavaSparkContext$.MODULE$.<Tuple2<StateAndTimers, Option<Iterable<InputT>>>>fakeClassTag());
     // TODO: serialize typed data (K & InputT) for checkpointing ?
     // go back to Java now.
     // filter state-only output and remove state from output.
     return JavaPairDStream.fromPairDStream(outputStateStream,
         JavaSparkContext$.MODULE$.<K>fakeClassTag(),
-        JavaSparkContext$.MODULE$.<Tuple2<Table<String, String, byte[]>,
-            Option<Iterable<InputT>>>>fakeClassTag())
-        .filter(new Function<Tuple2<K, Tuple2<Table<String, String, byte[]>,
-            Option<Iterable<InputT>>>>, Boolean>() {
-          @Override
-          public Boolean call(
-              Tuple2<K, Tuple2<Table<String, String, byte[]>, Option<Iterable<InputT>>>> t2)
-                  throws Exception {
+        JavaSparkContext$.MODULE$.<Tuple2<StateAndTimers, Option<Iterable<InputT>>>>fakeClassTag())
+        .filter(
+            new Function<Tuple2<K, Tuple2<StateAndTimers, Option<Iterable<InputT>>>>, Boolean>() {
+              @Override
+              public Boolean call(
+                  Tuple2<K, Tuple2<StateAndTimers, Option<Iterable<InputT>>>> t2) throws Exception {
                     // filter output if defined.
                     Option<Iterable<InputT>> iterableOption = t2._2()._2();
                     return iterableOption.isDefined();
-          }
+              }
         })
-        .map(new Function<Tuple2<K, Tuple2<Table<String, String, byte[]>,
+        .map(new Function<Tuple2<K, Tuple2<StateAndTimers,
             Option<Iterable<InputT>>>>, KV<K, Iterable<InputT>>>() {
-          @Override
-          public KV<K, Iterable<InputT>> call(
-              Tuple2<K, Tuple2<Table<String, String, byte[]>, Option<Iterable<InputT>>>> t2)
-                  throws Exception {
+              @Override
+              public KV<K, Iterable<InputT>> call(
+                  Tuple2<K, Tuple2<StateAndTimers, Option<Iterable<InputT>>>> t2) throws Exception {
                     // drop the state since it is already persisted at this point.
                     return KV.of(t2._1(), t2._2()._2().get());
-          }
+              }
         })
         .map(WindowingHelpers.<KV<K, Iterable<InputT>>>windowFunction());
+  }
+
+  private static class StateAndTimers {
+    //Serializable state for internals (namespace to state tag to coded value).
+    private final Table<String, String, byte[]> state;
+    private final Collection<TimerInternals.TimerData> timers;
+
+    private StateAndTimers(
+        Table<String, String, byte[]> state, Collection<TimerInternals.TimerData> timers) {
+      this.state = state;
+      this.timers = timers;
+    }
+
+    public Table<String, String, byte[]> getState() {
+      return state;
+    }
+
+    public Collection<TimerInternals.TimerData> getTimers() {
+      return timers;
+    }
   }
 
   private static class OutputWindowedValueHolder<K, V> implements OutputWindowedValue<KV<K, V>> {
