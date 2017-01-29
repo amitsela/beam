@@ -19,6 +19,7 @@ package org.apache.beam.runners.spark.stateful;
 
 import com.google.common.collect.Sets;
 import java.util.Collection;
+import java.util.Iterator;
 import java.util.Set;
 import javax.annotation.Nullable;
 import org.apache.beam.runners.spark.util.GlobalWatermarkHolder.MicrobatchTime;
@@ -48,10 +49,12 @@ class SparkTimerInternals implements TimerInternals {
   /** This should only be called after processing the element. */
   Collection<TimerData> getTimersReadyToProcess() {
     Set<TimerData> toFire = Sets.newHashSet();
-    for (TimerData timer: timers) {
+    Iterator<TimerData> iterator = timers.iterator();
+    while (iterator.hasNext()) {
+      TimerData timer = iterator.next();
       if (timer.getTimestamp().isBefore(currentHighWatermark())) {
         toFire.add(timer);
-        timers.remove(timer);
+        iterator.remove();
       }
     }
     return toFire;
