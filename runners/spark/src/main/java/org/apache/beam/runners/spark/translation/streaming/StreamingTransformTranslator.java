@@ -52,6 +52,7 @@ import org.apache.beam.runners.spark.translation.TransformEvaluator;
 import org.apache.beam.runners.spark.translation.TranslationUtils;
 import org.apache.beam.runners.spark.translation.WindowingHelpers;
 import org.apache.beam.runners.spark.util.BroadcastHelper;
+import org.apache.beam.runners.spark.util.GlobalWatermarkHolder;
 import org.apache.beam.sdk.coders.CannotProvideCoderException;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.IterableCoder;
@@ -118,11 +119,12 @@ final class StreamingTransformTranslator {
     };
   }
 
-  private static <T> TransformEvaluator<CreateStream<T>> createFromQueue() {
+  private static <T> TransformEvaluator<CreateStream<T>> createStream() {
     return new TransformEvaluator<CreateStream<T>>() {
       @Override
       public void evaluate(CreateStream<T> transform, EvaluationContext context) {
-        Queue<Iterable<T>> values = transform.getQueuedValues();
+        Queue<Iterable<T>> values = transform.getBatches();
+        GlobalWatermarkHolder.addAll(transform.getTimes());
         Coder<T> coder = context.getOutput(transform).getCoder();
         context.putUnboundedDatasetFromQueue(transform, values, coder);
       }
@@ -523,7 +525,7 @@ final class StreamingTransformTranslator {
     EVALUATORS.put(ParDo.Bound.class, parDo());
     EVALUATORS.put(ParDo.BoundMulti.class, multiDo());
     EVALUATORS.put(ConsoleIO.Write.Unbound.class, print());
-    EVALUATORS.put(CreateStream.class, createFromQueue());
+    EVALUATORS.put(CreateStream.class, createStream());
     EVALUATORS.put(Window.Bound.class, window());
     EVALUATORS.put(Flatten.FlattenPCollectionList.class, flattenPColl());
   }

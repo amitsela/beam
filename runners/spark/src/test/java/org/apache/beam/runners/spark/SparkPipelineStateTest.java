@@ -75,7 +75,7 @@ public class SparkPipelineStateTest implements Serializable {
 
   private PTransform<PBegin, PCollection<String>> getValues(final SparkPipelineOptions options) {
     return options.isStreaming()
-        ? CreateStream.withFirstBatch("one", "two")
+        ? CreateStream.<String>withBatchInterval(Duration.millis(1)).nextBatch("one", "two")
         : Create.of("one", "two");
   }
 

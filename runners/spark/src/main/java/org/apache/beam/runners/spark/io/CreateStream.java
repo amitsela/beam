@@ -18,39 +18,87 @@
 package org.apache.beam.runners.spark.io;
 
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.LinkedList;
 import java.util.Queue;
+import org.apache.beam.runners.spark.util.GlobalWatermarkHolder.MicrobatchTime;
 import org.apache.beam.sdk.transforms.PTransform;
+import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
+import org.joda.time.Duration;
+import org.joda.time.Instant;
 
 
 /**
  * Create an input stream from Queue. For SparkRunner tests only.
  *
- * @param <T> stream type
+ * @param <T> stream type.
  */
 public final class CreateStream<T> extends PTransform<PBegin, PCollection<T>> {
 
-  private final Queue<Iterable<T>> queuedValues = new LinkedList<>();
+  private final Duration batchInterval;
+  private final Instant initialSystemTime;
+  private final Queue<Iterable<T>> batches = new LinkedList<>();
+  private final Deque<MicrobatchTime> times = new LinkedList<>();
 
-  private CreateStream(Iterable<T> first) {
-    queuedValues.offer(first);
+  private Instant lowWatermark = new Instant(0);
+
+  private CreateStream(Duration batchInterval, Instant initialSystemTime) {
+    this.batchInterval = batchInterval;
+    this.initialSystemTime = initialSystemTime;
   }
 
-  @SafeVarargs
-  public static <T> CreateStream<T> withFirstBatch(T... batchValues) {
-    return new CreateStream<>(Arrays.asList(batchValues));
+  /** Set the batch interval for the stream. */
+  public static <T> CreateStream<T> withBatchInterval(Duration batchInterval) {
+    return new CreateStream<>(batchInterval, new Instant(0));
   }
 
-  public CreateStream<T> followedBy(T... batchValues) {
-    queuedValues.offer(Arrays.asList(batchValues));
+  /** Set the initial wall time. */
+  public CreateStream<T> initialSystemTimeAt(Instant initialSystemTime) {
+    return new CreateStream<>(batchInterval, initialSystemTime);
+  }
+
+  /**
+   * Enqueue next micro-batch values.
+   * This is backed by a {@link Queue} so stream input order would keep the population order (FIFO).
+   */
+  public CreateStream<T> nextBatch(T... batchValues) {
+    batches.offer(Arrays.asList(batchValues));
     return this;
   }
 
-  public Queue<Iterable<T>> getQueuedValues() {
-    return queuedValues;
+  /**
+   * Advances the watermark in the next batch.
+   */
+  public CreateStream<T> advanceWatermarkForNextBatch(Instant watermark) {
+    // move the system time.
+    Instant nextSynchronizedProcessingTime = times.peekLast() == null ? initialSystemTime
+        : times.peekLast().getSynchronizedProcessingTime().plus(batchInterval);
+    times.offer(new MicrobatchTime(-1, lowWatermark, watermark, nextSynchronizedProcessingTime));
+    lowWatermark = watermark;
+    return this;
+  }
+
+  /**
+   * Advances the watermark in the next batch to the end-of-time.
+   */
+  public CreateStream<T> advanceNextBatchWatermarkToInfinity() {
+    return advanceWatermarkForNextBatch(BoundedWindow.TIMESTAMP_MAX_VALUE);
+  }
+
+  /** Get the underlying queue representing the mock stream of micro-batches. */
+  public Queue<Iterable<T>> getBatches() {
+    return batches;
+  }
+
+  /**
+   * Get times so they can be pushed into the
+   * {@link org.apache.beam.runners.spark.util.GlobalWatermarkHolder}.
+   */
+  public Queue<MicrobatchTime> getTimes() {
+    return times;
   }
 
   @Override
@@ -58,4 +106,5 @@ public final class CreateStream<T> extends PTransform<PBegin, PCollection<T>> {
     return PCollection.createPrimitiveOutputInternal(
         input.getPipeline(), WindowingStrategy.globalDefault(), PCollection.IsBounded.UNBOUNDED);
   }
+
 }
