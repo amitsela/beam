@@ -25,6 +25,7 @@ import org.apache.beam.runners.spark.coders.CoderHelpers;
 import org.apache.beam.runners.spark.stateful.StateSpecFunctions;
 import org.apache.beam.runners.spark.translation.SparkRuntimeContext;
 import org.apache.beam.runners.spark.util.GlobalWatermarkHolder;
+import org.apache.beam.runners.spark.util.GlobalWatermarkHolder.MicrobatchTime;
 import org.apache.beam.sdk.io.Source;
 import org.apache.beam.sdk.io.UnboundedSource;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
@@ -193,10 +194,11 @@ public class SparkUnboundedSource {
         }
         // add to watermark queue.
         GlobalWatermarkHolder.add(
-            inputDStreamId,
-            globalLowWatermarkForBatch,
-            globalHighWatermarkForBatch,
-            validTime);
+            new MicrobatchTime(
+                inputDStreamId,
+                globalLowWatermarkForBatch,
+                globalHighWatermarkForBatch,
+                new Instant(validTime.milliseconds())));
       }
       // report - for RateEstimator and visibility.
       report(validTime, count, globalLowWatermarkForBatch, globalHighWatermarkForBatch);
