@@ -27,7 +27,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.broadcast.Broadcast;
-import org.apache.spark.streaming.Time;
 import org.joda.time.Instant;
 
 
@@ -43,13 +42,14 @@ public class GlobalWatermarkHolder {
   private static volatile Broadcast<MicrobatchTime> broadcast = null;
   private static final Queue<MicrobatchTime> queue = new ConcurrentLinkedQueue<>();
 
-  public static void add(
-      int sourceId,
-      Instant lowWatermark,
-      Instant highWatermark,
-      Time processingTime) {
-    Instant syncTime = new Instant(processingTime.milliseconds());
-    queue.offer(new MicrobatchTime(sourceId, lowWatermark, highWatermark, syncTime));
+  public static void add(MicrobatchTime microbatchTime) {
+    queue.offer(microbatchTime);
+  }
+
+  public static void addAll(Queue<MicrobatchTime> microbatchTimes) {
+    while (!microbatchTimes.isEmpty()) {
+      add(microbatchTimes.poll());
+    }
   }
 
   /**
@@ -116,7 +116,8 @@ public class GlobalWatermarkHolder {
     private final Instant highWatermark;
     private final Instant synchronizedProcessingTime;
 
-    MicrobatchTime(
+    @VisibleForTesting
+    public MicrobatchTime(
         int sourceId,
         Instant lowWatermark,
         Instant highWatermark,
