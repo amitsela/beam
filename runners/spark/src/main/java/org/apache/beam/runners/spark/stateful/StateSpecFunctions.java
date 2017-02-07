@@ -65,6 +65,7 @@ import org.apache.spark.Accumulator;
 import org.apache.spark.Partitioner;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.JavaSparkContext$;
+import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.Function2;
 import org.apache.spark.streaming.State;
@@ -78,7 +79,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import scala.Option;
-import scala.Some;
 import scala.Tuple2;
 import scala.Tuple3;
 import scala.collection.Seq;
@@ -129,22 +129,22 @@ public class StateSpecFunctions {
     JavaSparkContext jsc = new JavaSparkContext(pairDStreamFunctions.ssc().sc());
     final Accumulator<NamedAggregators> accumulator = AccumulatorSingleton.getInstance(jsc);
 
-    DStream<Tuple2<K, Tuple2<StateAndTimers, Option<Iterable<InputT>>>>> outputStateStream =
-        pairDStreamFunctions
+    DStream<Tuple2<K, Tuple2<StateAndTimers, List<WindowedValue<KV<K, Iterable<InputT>>>>>>>
+        outputStateStream = pairDStreamFunctions
             .updateStateByKey(
                 new SerializableFunction1<
                     /* generics look cumbersome here, but it's basically Iterator -> Iterator */
                     scala.collection.Iterator<
                         Tuple3<K, Seq<Iterable<WindowedValue<InputT>>>,
                         Option<Tuple2<StateAndTimers,
-                        Option<Iterable<InputT>>>>>>,
+                        List<WindowedValue<KV<K, Iterable<InputT>>>>>>>>,
                     scala.collection.Iterator<Tuple2<K, Tuple2<StateAndTimers,
-                        Option<Iterable<InputT>>>>>>() {
+                        List<WindowedValue<KV<K, Iterable<InputT>>>>>>>>() {
       @Override
       public scala.collection.Iterator<Tuple2<K, Tuple2<StateAndTimers,
-          Option<Iterable<InputT>>>>> apply(
+          List<WindowedValue<KV<K, Iterable<InputT>>>>>>> apply(
               final scala.collection.Iterator<Tuple3<K, Seq<Iterable<WindowedValue<InputT>>>,
-                  Option<Tuple2<StateAndTimers, Option<Iterable<InputT>>>>>> iter) {
+              Option<Tuple2<StateAndTimers, List<WindowedValue<KV<K, Iterable<InputT>>>>>>>> iter) {
         //--- ACTUAL STATEFUL OPERATION:
         //
         // Input Iterator: the partition (~bundle) of a cogrouping of the input
@@ -159,7 +159,7 @@ public class StateSpecFunctions {
 
         final SystemReduceFn<K, InputT, Iterable<InputT>, Iterable<InputT>, W> reduceFn =
             SystemReduceFn.buffering(iCoder);
-        final OutputWindowedValueHolder<K, Iterable<InputT>> outputHolder =
+        final OutputWindowedValueHolder<K, InputT> outputHolder =
             new OutputWindowedValueHolder<>();
         final Aggregator<Long, Long> droppedDueToClosedWindow = runtimeContext.createAggregator(
             accumulator,
@@ -171,24 +171,25 @@ public class StateSpecFunctions {
             Sum.ofLongs());
 
         AbstractIterator<
-            Tuple2<K, Tuple2<StateAndTimers, Option<Iterable<InputT>>>>> outIter =
-                new AbstractIterator<Tuple2<K,
-                    Tuple2<StateAndTimers, Option<Iterable<InputT>>>>>() {
+            Tuple2<K, Tuple2<StateAndTimers, List<WindowedValue<KV<K, Iterable<InputT>>>>>>>
+                outIter = new AbstractIterator<Tuple2<K,
+                    Tuple2<StateAndTimers, List<WindowedValue<KV<K, Iterable<InputT>>>>>>>() {
                   @Override
                   protected Tuple2<K, Tuple2<StateAndTimers,
-                      Option<Iterable<InputT>>>> computeNext() {
+                      List<WindowedValue<KV<K, Iterable<InputT>>>>>> computeNext() {
                     // input iterator is a Spark partition (~bundle), containing keys and their
                     // (possibly) previous-state and (possibly) new data.
                     while (iter.hasNext()) {
                       // for each element in the partition:
                       Tuple3<K, Seq<Iterable<WindowedValue<InputT>>>, Option<Tuple2<StateAndTimers,
-                          Option<Iterable<InputT>>>>> next = iter.next();
+                          List<WindowedValue<KV<K, Iterable<InputT>>>>>>> next = iter.next();
                       K key = next._1();
 
                       Seq<Iterable<WindowedValue<InputT>>> seq = next._2();
 
                       Option<Tuple2<StateAndTimers,
-                          Option<Iterable<InputT>>>> prevStateAndTimersOpt = next._3();
+                          List<WindowedValue<KV<K, Iterable<InputT>>>>>>
+                              prevStateAndTimersOpt = next._3();
 
                       SparkStateInternals<K> stateInternals;
                       SparkTimerInternals timerInternals = new SparkTimerInternals(
@@ -225,12 +226,15 @@ public class StateSpecFunctions {
                         // new input for key.
                         try {
                           Iterable<WindowedValue<InputT>> elementsIterable = seq.head();
-                          reduceFnRunner.processElements(LateDataUtils.dropExpiredWindows(
-                              key,
-                              elementsIterable,
-                              timerInternals,
-                              windowingStrategy,
-                              droppedDueToLateness));
+                          Iterable<WindowedValue<InputT>> validElements =
+                              LateDataUtils
+                                  .dropExpiredWindows(
+                                      key,
+                                      elementsIterable,
+                                      timerInternals,
+                                      windowingStrategy,
+                                      droppedDueToLateness);
+                          reduceFnRunner.processElements(validElements);
                         } catch (Exception e) {
                           throw new RuntimeException(
                               "Failed to process element with ReduceFnRunner", e);
@@ -239,21 +243,24 @@ public class StateSpecFunctions {
                         // no input and no state -> GC evict now.
                         continue;
                       }
-                      // call on timers with high watermark - since we're done processing.
                       try {
+                        // advance the watermark to HWM to fire by timers.
+                        timerInternals.advanceWatermark();
+                        // call on timers that are ready.
                         reduceFnRunner.onTimers(timerInternals.getTimersReadyToProcess());
                       } catch (Exception e) {
                         throw new RuntimeException(
                             "Failed to process ReduceFnRunner onTimer.", e);
                       }
-                      // obtain output, if fired.
+                      // this is mostly symbolic since actual persist is done by emitting output.
                       reduceFnRunner.persist();
-                      Option<Iterable<InputT>> outputOpt = outputHolder.getValue();
-                      if (outputOpt.isDefined() || !stateInternals.getState().isEmpty()) {
+                      // obtain output, if fired.
+                      List<WindowedValue<KV<K, Iterable<InputT>>>> outputs = outputHolder.get();
+                      if (!outputs.isEmpty() || !stateInternals.getState().isEmpty()) {
                         StateAndTimers updated = new StateAndTimers(stateInternals.getState(),
                             timerInternals.getTimers());
                         // persist Spark's state by outputting.
-                        return new Tuple2<>(key, new Tuple2<>(updated, outputOpt));
+                        return new Tuple2<>(key, new Tuple2<>(updated, outputs));
                       }
                       // an empty state with no output, can be evicted completely - do nothing.
                     }
@@ -263,33 +270,37 @@ public class StateSpecFunctions {
         return scala.collection.JavaConversions.asScalaIterator(outIter);
       }
     }, partitioner, true,
-        JavaSparkContext$.MODULE$.<Tuple2<StateAndTimers, Option<Iterable<InputT>>>>fakeClassTag());
+        JavaSparkContext$.MODULE$.<Tuple2<StateAndTimers,
+            List<WindowedValue<KV<K, Iterable<InputT>>>>>>fakeClassTag());
     // TODO: serialize typed data (K & InputT) for checkpointing ?
     // go back to Java now.
     // filter state-only output and remove state from output.
     return JavaPairDStream.fromPairDStream(outputStateStream,
         JavaSparkContext$.MODULE$.<K>fakeClassTag(),
-        JavaSparkContext$.MODULE$.<Tuple2<StateAndTimers, Option<Iterable<InputT>>>>fakeClassTag())
+        JavaSparkContext$.MODULE$.<Tuple2<StateAndTimers,
+            List<WindowedValue<KV<K, Iterable<InputT>>>>>>fakeClassTag())
         .filter(
-            new Function<Tuple2<K, Tuple2<StateAndTimers, Option<Iterable<InputT>>>>, Boolean>() {
+            new Function<Tuple2<K, Tuple2<StateAndTimers,
+                List<WindowedValue<KV<K, Iterable<InputT>>>>>>, Boolean>() {
               @Override
               public Boolean call(
-                  Tuple2<K, Tuple2<StateAndTimers, Option<Iterable<InputT>>>> t2) throws Exception {
+                  Tuple2<K, Tuple2<StateAndTimers,
+                      List<WindowedValue<KV<K, Iterable<InputT>>>>>> t2) throws Exception {
                     // filter output if defined.
-                    Option<Iterable<InputT>> iterableOption = t2._2()._2();
-                    return iterableOption.isDefined();
+                return !t2._2()._2().isEmpty();
               }
         })
-        .map(new Function<Tuple2<K, Tuple2<StateAndTimers,
-            Option<Iterable<InputT>>>>, KV<K, Iterable<InputT>>>() {
+        .flatMap(new FlatMapFunction<Tuple2<K, Tuple2<StateAndTimers,
+            List<WindowedValue<KV<K, Iterable<InputT>>>>>>,
+                WindowedValue<KV<K, Iterable<InputT>>>>() {
               @Override
-              public KV<K, Iterable<InputT>> call(
-                  Tuple2<K, Tuple2<StateAndTimers, Option<Iterable<InputT>>>> t2) throws Exception {
+              public Iterable<WindowedValue<KV<K, Iterable<InputT>>>> call(
+                  Tuple2<K, Tuple2<StateAndTimers,
+                  List<WindowedValue<KV<K, Iterable<InputT>>>>>> t2) throws Exception {
                     // drop the state since it is already persisted at this point.
-                    return KV.of(t2._1(), t2._2()._2().get());
+                return t2._2()._2();
               }
-        })
-        .map(WindowingHelpers.<KV<K, Iterable<InputT>>>windowFunction());
+        });
   }
 
   private static class StateAndTimers {
@@ -312,25 +323,25 @@ public class StateSpecFunctions {
     }
   }
 
-  private static class OutputWindowedValueHolder<K, V> implements OutputWindowedValue<KV<K, V>> {
-    private WindowedValue<KV<K, V>> windowedValue;
+  private static class OutputWindowedValueHolder<K, V>
+      implements OutputWindowedValue<KV<K, Iterable<V>>> {
+    private List<WindowedValue<KV<K, Iterable<V>>>> windowedValues = new ArrayList<>();
 
     @Override
     public void outputWindowedValue(
-        KV<K, V> output,
+        KV<K, Iterable<V>> output,
         Instant timestamp,
         Collection<? extends BoundedWindow> windows,
         PaneInfo pane) {
-      windowedValue = WindowedValue.of(output, timestamp, windows, pane);
+      windowedValues.add(WindowedValue.of(output, timestamp, windows, pane));
     }
 
-    private Option<V> getValue() {
-      return windowedValue == null ? Option.<V>empty()
-          : Some.apply(windowedValue.getValue().getValue());
+    private List<WindowedValue<KV<K, Iterable<V>>>> get() {
+      return windowedValues;
     }
 
     private void clear() {
-      windowedValue = null;
+      windowedValues.clear();
     }
 
     @Override
@@ -403,7 +414,7 @@ public class StateSpecFunctions {
             (MicrobatchSource<T, CheckpointMarkT>) source;
 
         // Initial high/low watermarks.
-        Instant lowWatermark = BoundedWindow.TIMESTAMP_MIN_VALUE;
+        Instant lowWatermark = new Instant(0);
         Instant highWatermark;
 
         // if state exists, use it, otherwise it's first time so use the startCheckpointMark.
