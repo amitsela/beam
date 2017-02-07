@@ -23,7 +23,6 @@ import java.util.Iterator;
 import java.util.Set;
 import javax.annotation.Nullable;
 import org.apache.beam.runners.spark.util.GlobalWatermarkHolder.MicrobatchTime;
-import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.util.TimeDomain;
 import org.apache.beam.sdk.util.TimerInternals;
 import org.apache.beam.sdk.util.state.StateNamespace;
@@ -35,11 +34,21 @@ import org.joda.time.Instant;
  * An implementation of {@link TimerInternals} for the SparkRunner.
  */
 class SparkTimerInternals implements TimerInternals {
-  @Nullable private final Broadcast<MicrobatchTime> broadcast;
+  private final Instant lowWatermark;
+  private final Instant highWatermark;
+  private final Instant synchronizedProcessingTime;
   private final Set<TimerData> timers = Sets.newHashSet();
 
+  private Instant inputWatermark;
+
   SparkTimerInternals(@Nullable Broadcast<MicrobatchTime> broadcast) {
-    this.broadcast = broadcast;
+    lowWatermark = broadcast != null ? broadcast.getValue().getLowWatermark()
+        : new Instant(0);
+    highWatermark = broadcast != null ? broadcast.getValue().getHighWatermark()
+        : new Instant(0);
+    synchronizedProcessingTime = broadcast != null
+        ? broadcast.getValue().getSynchronizedProcessingTime() : new Instant(0);
+    inputWatermark = lowWatermark;
   }
 
   Collection<TimerData> getTimers() {
@@ -52,7 +61,7 @@ class SparkTimerInternals implements TimerInternals {
     Iterator<TimerData> iterator = timers.iterator();
     while (iterator.hasNext()) {
       TimerData timer = iterator.next();
-      if (timer.getTimestamp().isBefore(currentHighWatermark())) {
+      if (timer.getTimestamp().isBefore(inputWatermark)) {
         toFire.add(timer);
         iterator.remove();
       }
@@ -87,22 +96,24 @@ class SparkTimerInternals implements TimerInternals {
   @Nullable
   @Override
   public Instant currentSynchronizedProcessingTime() {
-    return broadcast != null ? broadcast.getValue().getSynchronizedProcessingTime()
-        : BoundedWindow.TIMESTAMP_MIN_VALUE;
+    return synchronizedProcessingTime;
   }
 
   @Override
   public Instant currentInputWatermarkTime() {
-    return broadcast == null ? BoundedWindow.TIMESTAMP_MIN_VALUE
-        : broadcast.getValue().getLowWatermark();
+    return inputWatermark;
+  }
+
+  /** Advances the watermark - since */
+  public void advanceWatermark() {
+    inputWatermark = highWatermark;
   }
 
   /**
    * Returns the "high" watermark, representing the microbatch global end-of-read watermark.
    */
   Instant currentHighWatermark() {
-    return broadcast == null ? BoundedWindow.TIMESTAMP_MIN_VALUE
-        : broadcast.getValue().getHighWatermark();
+    return highWatermark;
   }
 
   @Nullable
