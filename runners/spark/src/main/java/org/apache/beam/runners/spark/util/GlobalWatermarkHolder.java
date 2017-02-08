@@ -24,7 +24,6 @@ import com.google.common.annotations.VisibleForTesting;
 import java.io.Serializable;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.broadcast.Broadcast;
 import org.joda.time.Instant;
@@ -37,6 +36,7 @@ import org.joda.time.Instant;
  * and advances the watermarks according to the queue (first-in-first-out).
  */
 public class GlobalWatermarkHolder {
+  private static final Instant START_TIME = new Instant(0);
 
   //TODO: broadcast a map of source-times to support multiple sources watermarks.
   private static volatile Broadcast<MicrobatchTime> broadcast = null;
@@ -68,9 +68,9 @@ public class GlobalWatermarkHolder {
       if (queue.isEmpty()) {
         return;
       }
-      Instant currentLowWatermark = BoundedWindow.TIMESTAMP_MIN_VALUE;
-      Instant currentHighWatermark = BoundedWindow.TIMESTAMP_MIN_VALUE;
-      Instant currentSynchronizedProcessingTime = BoundedWindow.TIMESTAMP_MIN_VALUE;
+      Instant currentLowWatermark = START_TIME;
+      Instant currentHighWatermark = START_TIME;
+      Instant currentSynchronizedProcessingTime = START_TIME;
       if (broadcast != null) {
         currentLowWatermark = broadcast.getValue().getLowWatermark();
         currentHighWatermark = broadcast.getValue().getHighWatermark();
@@ -85,7 +85,9 @@ public class GlobalWatermarkHolder {
           ? next.getHighWatermark() : currentHighWatermark;
       Instant nextSynchronizedProcessingTime = next.getSynchronizedProcessingTime();
       checkState(!nextLowWatermark.isAfter(nextHighWatermark),
-          "Low watermark cannot be later then high watermark.");
+          String.format(
+              "Low watermark %s cannot be later then high watermark %s",
+              nextLowWatermark, nextHighWatermark));
       checkState(nextSynchronizedProcessingTime.isAfter(currentSynchronizedProcessingTime),
           "Synchronized processing time must advance.");
       broadcast = jsc.broadcast(
@@ -100,10 +102,7 @@ public class GlobalWatermarkHolder {
   @VisibleForTesting
   public static synchronized void clear() {
     queue.clear();
-    if (broadcast != null) {
-      broadcast.destroy(true);
-      broadcast = null;
-    }
+    broadcast = null;
   }
 
   /**
