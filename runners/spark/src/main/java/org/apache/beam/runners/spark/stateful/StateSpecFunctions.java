@@ -462,8 +462,9 @@ public class StateSpecFunctions {
             finished = !reader.advance();
           }
 
-          // end-of-read watermark is the high watermark.
-          highWatermark = ((MicrobatchSource.Reader) reader).getWatermark();
+          // end-of-read watermark is the high watermark, but don't allow decrease.
+          Instant sourceWatermark = ((MicrobatchSource.Reader) reader).getWatermark();
+          highWatermark = sourceWatermark.isAfter(lowWatermark) ? sourceWatermark : lowWatermark;
           // close and checkpoint reader.
           reader.close();
           LOG.info("Source id {} spent {} msec on reading.", microbatchSource.getId(),
