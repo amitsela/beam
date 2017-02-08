@@ -28,7 +28,6 @@ import org.apache.beam.runners.spark.util.GlobalWatermarkHolder;
 import org.apache.beam.runners.spark.util.GlobalWatermarkHolder.MicrobatchTime;
 import org.apache.beam.sdk.io.Source;
 import org.apache.beam.sdk.io.UnboundedSource;
-import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.spark.api.java.JavaRDD;
@@ -176,8 +175,8 @@ public class SparkUnboundedSource {
       // compute parent.
       scala.Option<RDD<Metadata>> parentRDDOpt = parent.getOrCompute(validTime);
       long count = 0;
-      Instant globalLowWatermarkForBatch = BoundedWindow.TIMESTAMP_MIN_VALUE;
-      Instant globalHighWatermarkForBatch = BoundedWindow.TIMESTAMP_MIN_VALUE;
+      Instant globalLowWatermarkForBatch = new Instant(0);
+      Instant globalHighWatermarkForBatch = new Instant(0);
       if (parentRDDOpt.isDefined()) {
         JavaRDD<Metadata> parentRDD = parentRDDOpt.get().toJavaRDD();
         for (Metadata metadata: parentRDD.collect()) {
