@@ -35,6 +35,7 @@ import org.apache.beam.runners.spark.translation.SparkPipelineTranslator;
 import org.apache.beam.runners.spark.translation.TransformEvaluator;
 import org.apache.beam.runners.spark.translation.TransformTranslator;
 import org.apache.beam.runners.spark.translation.streaming.SparkRunnerStreamingContextFactory;
+import org.apache.beam.runners.spark.util.GlobalWatermarkHolder;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.Read;
 import org.apache.beam.sdk.options.PipelineOptions;
@@ -56,6 +57,9 @@ import org.apache.spark.SparkEnv$;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.metrics.MetricsSystem;
 import org.apache.spark.streaming.api.java.JavaStreamingContext;
+import org.apache.spark.streaming.api.java.JavaStreamingListener;
+import org.apache.spark.streaming.api.java.JavaStreamingListenerBatchCompleted;
+import org.apache.spark.streaming.api.java.JavaStreamingListenerWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -160,6 +164,16 @@ public final class SparkRunner extends PipelineRunner<SparkPipelineResult> {
           new SparkRunnerStreamingContextFactory(pipeline, mOptions);
       final JavaStreamingContext jssc =
           JavaStreamingContext.getOrCreate(mOptions.getCheckpointDir(), contextFactory);
+
+      // register Watermark listener to broadcast the advanced WM onBatchCompleted.
+      jssc.addStreamingListener(new JavaStreamingListenerWrapper(new JavaStreamingListener() {
+
+        @Override
+        public void onBatchCompleted(JavaStreamingListenerBatchCompleted batchCompleted) {
+          GlobalWatermarkHolder.advance(jssc.sparkContext());
+        }
+
+      }));
 
       startPipeline = executorService.submit(new Runnable() {
 
