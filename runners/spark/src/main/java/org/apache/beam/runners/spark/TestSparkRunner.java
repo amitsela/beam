@@ -23,7 +23,6 @@ import static org.hamcrest.Matchers.is;
 
 import java.io.File;
 import java.io.IOException;
-
 import org.apache.beam.runners.core.UnboundedReadFromBoundedSource;
 import org.apache.beam.runners.spark.translation.streaming.PAssertWithoutFlatten;
 import org.apache.beam.sdk.Pipeline;
@@ -42,7 +41,8 @@ import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
 import org.apache.commons.io.FileUtils;
 import org.joda.time.Duration;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 /**
@@ -67,6 +67,8 @@ import org.joda.time.Duration;
  * }
  */
 public final class TestSparkRunner extends PipelineRunner<SparkPipelineResult> {
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestSparkRunner.class);
 
   private SparkRunner delegate;
   private boolean isForceStreaming;
@@ -136,6 +138,13 @@ public final class TestSparkRunner extends PipelineRunner<SparkPipelineResult> {
         // validate assertion didn't fail.
         int failure = result.getAggregatorValue(PAssert.FAILURE_COUNTER, Integer.class);
         assertThat("Failure aggregator should be zero.", failure, is(0));
+
+        LOG.info(
+            String.format(
+                "Successfully asserted pipeline with %d successful assertions "
+                    + "and %d failed assertions",
+                success,
+                failure));
       }
     } finally {
       try {
