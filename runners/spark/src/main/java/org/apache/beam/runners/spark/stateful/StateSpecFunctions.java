@@ -292,7 +292,7 @@ public class StateSpecFunctions {
               public Boolean call(
                   Tuple2<K, Tuple2<StateAndTimers,
                       List<WindowedValue<KV<K, Iterable<InputT>>>>>> t2) throws Exception {
-                    // filter output if defined.
+                // filter output if defined.
                 return !t2._2()._2().isEmpty();
               }
         })
@@ -303,7 +303,7 @@ public class StateSpecFunctions {
               public Iterable<WindowedValue<KV<K, Iterable<InputT>>>> call(
                   Tuple2<K, Tuple2<StateAndTimers,
                   List<WindowedValue<KV<K, Iterable<InputT>>>>>> t2) throws Exception {
-                    // drop the state since it is already persisted at this point.
+                // drop the state since it is already persisted at this point.
                 return t2._2()._2();
               }
         });
