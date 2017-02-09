@@ -35,6 +35,7 @@ import org.apache.beam.runners.core.ReduceFnRunner;
 import org.apache.beam.runners.core.SystemReduceFn;
 import org.apache.beam.runners.core.triggers.ExecutableTriggerStateMachine;
 import org.apache.beam.runners.core.triggers.TriggerStateMachines;
+import org.apache.beam.runners.spark.SparkPipelineOptions;
 import org.apache.beam.runners.spark.aggregators.AccumulatorSingleton;
 import org.apache.beam.runners.spark.aggregators.NamedAggregators;
 import org.apache.beam.runners.spark.coders.CoderHelpers;
@@ -68,6 +69,7 @@ import org.apache.spark.api.java.JavaSparkContext$;
 import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.Function2;
+import org.apache.spark.streaming.Duration;
 import org.apache.spark.streaming.State;
 import org.apache.spark.streaming.StateSpec;
 import org.apache.spark.streaming.api.java.JavaDStream;
@@ -107,6 +109,9 @@ public class StateSpecFunctions {
           final Coder<InputT> iCoder,
           final WindowingStrategy<?, W> windowingStrategy,
           final SparkRuntimeContext runtimeContext) {
+    final Long checkpointDuration =
+        runtimeContext.getPipelineOptions().as(SparkPipelineOptions.class)
+            .getCheckpointDurationMillis();
     // we have to move to Scala API to avoid Optional in the Java API.
     // see: SPARK-4819.
     // we also have a broader API for Scala (access to partitioner, etc.).
@@ -271,7 +276,8 @@ public class StateSpecFunctions {
       }
     }, partitioner, true,
         JavaSparkContext$.MODULE$.<Tuple2<StateAndTimers,
-            List<WindowedValue<KV<K, Iterable<InputT>>>>>>fakeClassTag());
+            List<WindowedValue<KV<K, Iterable<InputT>>>>>>fakeClassTag())
+                .checkpoint(new Duration(checkpointDuration));
     // TODO: serialize typed data (K & InputT) for checkpointing ?
     // go back to Java now.
     // filter state-only output and remove state from output.
