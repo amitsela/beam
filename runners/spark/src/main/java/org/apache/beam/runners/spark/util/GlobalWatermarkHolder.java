@@ -70,7 +70,8 @@ public class GlobalWatermarkHolder {
       }
       Instant currentLowWatermark = START_TIME;
       Instant currentHighWatermark = START_TIME;
-      Instant currentSynchronizedProcessingTime = START_TIME;
+      // we start synchronized processing time at -1 to comply with "always increasing".
+      Instant currentSynchronizedProcessingTime = new Instant(-1);
       if (broadcast != null) {
         currentLowWatermark = broadcast.getValue().getLowWatermark();
         currentHighWatermark = broadcast.getValue().getHighWatermark();
