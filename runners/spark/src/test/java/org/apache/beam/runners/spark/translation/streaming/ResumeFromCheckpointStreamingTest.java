@@ -30,16 +30,24 @@ import java.util.concurrent.TimeUnit;
 import org.apache.beam.runners.spark.SparkPipelineOptions;
 import org.apache.beam.runners.spark.SparkPipelineResult;
 import org.apache.beam.runners.spark.aggregators.ClearAggregatorsRule;
+import org.apache.beam.runners.spark.coders.CoderHelpers;
 import org.apache.beam.runners.spark.translation.streaming.utils.EmbeddedKafkaCluster;
-import org.apache.beam.runners.spark.translation.streaming.utils.PAssertStreaming;
+import org.apache.beam.runners.spark.translation.streaming.utils.ReuseSparkContext;
 import org.apache.beam.runners.spark.translation.streaming.utils.SparkTestPipelineOptionsForStreaming;
+import org.apache.beam.runners.spark.util.GlobalWatermarkHolder;
 import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.coders.InstantCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
 import org.apache.beam.sdk.io.kafka.KafkaIO;
 import org.apache.beam.sdk.transforms.Aggregator;
+import org.apache.beam.sdk.transforms.Count;
 import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.Keys;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.Sum;
+import org.apache.beam.sdk.transforms.windowing.AfterPane;
+import org.apache.beam.sdk.transforms.windowing.AfterWatermark;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
@@ -49,6 +57,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.Serializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.joda.time.Duration;
+import org.joda.time.Instant;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Rule;
@@ -70,11 +79,6 @@ public class ResumeFromCheckpointStreamingTest {
   private static final EmbeddedKafkaCluster EMBEDDED_KAFKA_CLUSTER =
       new EmbeddedKafkaCluster(EMBEDDED_ZOOKEEPER.getConnection(), new Properties());
   private static final String TOPIC = "kafka_beam_test_topic";
-  private static final Map<String, String> KAFKA_MESSAGES = ImmutableMap.of(
-      "k1", "v1", "k2", "v2", "k3", "v3", "k4", "v4"
-  );
-  private static final String[] EXPECTED = {"k1,v1", "k2,v2", "k3,v3", "k4,v4"};
-  private static final long EXPECTED_AGG_FIRST = 4L;
 
   @Rule
   public TemporaryFolder checkpointParentDir = new TemporaryFolder();
@@ -86,24 +90,36 @@ public class ResumeFromCheckpointStreamingTest {
   @Rule
   public ClearAggregatorsRule clearAggregatorsRule = new ClearAggregatorsRule();
 
+  @Rule
+  public ReuseSparkContext noContextResue = ReuseSparkContext.no();
+
   @BeforeClass
   public static void init() throws IOException {
     EMBEDDED_ZOOKEEPER.startup();
     EMBEDDED_KAFKA_CLUSTER.startup();
-    /// this test actually requires to NOT reuse the context but rather to stop it and start again
-    // from the checkpoint with a brand new context.
-    System.setProperty("beam.spark.test.reuseSparkContext", "false");
   }
 
-  private static void produce() {
+  private static void produce(Map<String, Instant> messages) {
     Properties producerProps = new Properties();
     producerProps.putAll(EMBEDDED_KAFKA_CLUSTER.getProps());
     producerProps.put("request.required.acks", 1);
     producerProps.put("bootstrap.servers", EMBEDDED_KAFKA_CLUSTER.getBrokerList());
     Serializer<String> stringSerializer = new StringSerializer();
-    try (@SuppressWarnings("unchecked") KafkaProducer<String, String> kafkaProducer =
-        new KafkaProducer(producerProps, stringSerializer, stringSerializer)) {
-          for (Map.Entry<String, String> en : KAFKA_MESSAGES.entrySet()) {
+    Serializer<Instant> instantSerializer = new Serializer<Instant>() {
+      @Override
+      public void configure(Map<String, ?> configs, boolean isKey) { }
+
+      @Override
+      public byte[] serialize(String topic, Instant data) {
+        return CoderHelpers.toByteArray(data, InstantCoder.of());
+      }
+
+      @Override
+      public void close() { }
+    };
+    try (@SuppressWarnings("unchecked") KafkaProducer<String, Instant> kafkaProducer =
+        new KafkaProducer(producerProps, stringSerializer, instantSerializer)) {
+          for (Map.Entry<String, Instant> en : messages.entrySet()) {
             kafkaProducer.send(new ProducerRecord<>(TOPIC, en.getKey(), en.getValue()));
           }
           kafkaProducer.close();
@@ -111,66 +127,87 @@ public class ResumeFromCheckpointStreamingTest {
   }
 
   @Test
-  public void testRun() throws Exception {
-    Duration batchIntervalDuration = Duration.standardSeconds(5);
+  public void testWithResume() throws Exception {
     SparkPipelineOptions options = commonOptions.withTmpCheckpointDir(checkpointParentDir);
-    // provide a generous enough batch-interval to have everything fit in one micro-batch.
-    options.setBatchIntervalMillis(batchIntervalDuration.getMillis());
-    // provide a very generous read time bound, we rely on num records bound here.
-    options.setMinReadTimeMillis(batchIntervalDuration.minus(1).getMillis());
-    // bound the read on the number of messages - 1 topic of 4 messages.
-    options.setMaxRecordsPerBatch(4L);
 
-    // checkpoint after first (and only) interval.
-    options.setCheckpointDurationMillis(options.getBatchIntervalMillis());
+    options.setCheckpointDurationMillis(500L);
+
+    // write to Kafka
+    produce(ImmutableMap.of(
+        "k1", new Instant(100),
+        "k2", new Instant(200),
+        "k3", new Instant(300),
+        "k4", new Instant(400)
+    ));
 
     // first run will read from Kafka backlog - "auto.offset.reset=smallest"
     SparkPipelineResult res = run(options);
+    res.waitUntilFinish(Duration.standardSeconds(2));
     long processedMessages1 = res.getAggregatorValue("processedMessages", Long.class);
     assertThat(String.format("Expected %d processed messages count but "
-        + "found %d", EXPECTED_AGG_FIRST, processedMessages1), processedMessages1,
-            equalTo(EXPECTED_AGG_FIRST));
+        + "found %d", 4, processedMessages1), processedMessages1, equalTo(4L));
+
+    // clear broadcasts and accumulators.
+    GlobalWatermarkHolder.clear();
+
+    // write a bit more.
+    produce(ImmutableMap.of(
+        "k5", new Instant(499)
+    ));
 
     // recovery should resume from last read offset, and read the second batch of input.
+    System.out.println("### run again!");
     res = runAgain(options);
+    res.waitUntilFinish(Duration.standardSeconds(2));
     long processedMessages2 = res.getAggregatorValue("processedMessages", Long.class);
     assertThat(String.format("Expected %d processed messages count but "
-        + "found %d", EXPECTED_AGG_FIRST, processedMessages2), processedMessages2,
-            equalTo(EXPECTED_AGG_FIRST));
+        + "found %d", 1, processedMessages2), processedMessages2, equalTo(1L));
   }
 
   private SparkPipelineResult runAgain(SparkPipelineOptions options) {
     clearAggregatorsRule.clearNamedAggregators();
     // sleep before next run.
-    Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
+    Uninterruptibles.sleepUninterruptibly(10, TimeUnit.MILLISECONDS);
     return run(options);
   }
 
   private static SparkPipelineResult run(SparkPipelineOptions options) {
-    // write to Kafka
-    produce();
-    Map<String, Object> consumerProps = ImmutableMap.<String, Object>of(
-        "auto.offset.reset", "earliest"
-    );
-
-    KafkaIO.Read<String, String> read = KafkaIO.read()
+    KafkaIO.TypedRead<String, Instant> read = KafkaIO.read()
         .withBootstrapServers(EMBEDDED_KAFKA_CLUSTER.getBrokerList())
         .withTopics(Collections.singletonList(TOPIC))
         .withKeyCoder(StringUtf8Coder.of())
-        .withValueCoder(StringUtf8Coder.of())
-        .updateConsumerProperties(consumerProps);
-
-    Duration windowDuration = new Duration(options.getBatchIntervalMillis());
+        .withValueCoder(InstantCoder.of())
+        .updateConsumerProperties(ImmutableMap.<String, Object>of("auto.offset.reset", "earliest"))
+        .withTimestampFn(new SerializableFunction<KV<String, Instant>, Instant>() {
+          @Override
+          public Instant apply(KV<String, Instant> kv) {
+            return kv.getValue();
+          }
+        }).withWatermarkFn(new SerializableFunction<KV<String, Instant>, Instant>() {
+          @Override
+          public Instant apply(KV<String, Instant> kv) {
+            // we add 1 milli to reach end-of-window.
+            return kv.getValue().plus(Duration.millis(1L));
+          }
+        });
 
     Pipeline p = Pipeline.create(options);
-    PCollection<String> formattedKV =
-        p.apply(read.withoutMetadata())
-        .apply(Window.<KV<String, String>>into(FixedWindows.of(windowDuration)))
-        .apply(ParDo.of(new FormatAsText()));
 
-    // graceful shutdown will make sure first batch (at least) will finish.
-    Duration timeout = Duration.standardSeconds(1L);
-    return PAssertStreaming.runAndAssertContents(p, formattedKV, EXPECTED, timeout);
+    PCollection<String> windowed = p
+        .apply(read.withoutMetadata())
+        .apply(Keys.<String>create())
+        .apply(ParDo.of(new PassThroughFn<String>()))
+        .apply(Window.<String>into(FixedWindows.of(Duration.millis(500)))
+            .triggering(AfterWatermark.pastEndOfWindow()
+                .withEarlyFirings(AfterPane.elementCountAtLeast(4)))
+                .accumulatingFiredPanes()
+                .withAllowedLateness(Duration.ZERO));
+
+    PCollection<Long> count = windowed.apply(Count.<String>globally().withoutDefaults());
+
+    count.apply(new PAssertWithoutFlatten());
+
+    return (SparkPipelineResult) p.run();
   }
 
   @AfterClass
@@ -179,7 +216,7 @@ public class ResumeFromCheckpointStreamingTest {
     EMBEDDED_ZOOKEEPER.shutdown();
   }
 
-  private static class FormatAsText extends DoFn<KV<String, String>, String> {
+  private static class PassThroughFn<T> extends DoFn<T, T> {
 
     private final Aggregator<Long, Long> aggregator =
         createAggregator("processedMessages", Sum.ofLongs());
@@ -187,8 +224,7 @@ public class ResumeFromCheckpointStreamingTest {
     @ProcessElement
     public void process(ProcessContext c) {
       aggregator.addValue(1L);
-      String formatted = c.element().getKey() + "," + c.element().getValue();
-      c.output(formatted);
+      c.output(c.element());
     }
   }
 
