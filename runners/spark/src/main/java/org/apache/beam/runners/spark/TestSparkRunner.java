@@ -125,6 +125,7 @@ public final class TestSparkRunner extends PipelineRunner<SparkPipelineResult> {
       GlobalWatermarkHolder.clear();
 
       TestPipelineOptions testPipelineOptions = pipeline.getOptions().as(TestPipelineOptions.class);
+      LOG.info("About to run test pipeline " + sparkOptions.getJobName());
       result = delegate.run(pipeline);
       result.waitUntilFinish(Duration.millis(timeout));
 
@@ -147,10 +148,9 @@ public final class TestSparkRunner extends PipelineRunner<SparkPipelineResult> {
 
         LOG.info(
             String.format(
-                "Successfully asserted pipeline with %d successful assertions "
-                    + "and %d failed assertions",
-                success,
-                failure));
+                "Successfully asserted pipeline %s with %d successful assertions.",
+                sparkOptions.getJobName(),
+                success));
       }
     } finally {
       try {

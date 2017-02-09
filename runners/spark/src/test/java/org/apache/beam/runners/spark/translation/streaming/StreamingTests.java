@@ -39,9 +39,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.junit.rules.TemporaryFolder;
-
-
-
+import org.junit.rules.TestName;
 
 
 /**
@@ -61,12 +59,15 @@ public class StreamingTests implements Serializable {
   @Rule
   public transient ReuseSparkContext noContextResue = ReuseSparkContext.no();
   @Rule
+  public transient TestName testName = new TestName();
+  @Rule
   public transient ExpectedException thrown = ExpectedException.none();
 
   @Test
   public void testLateDataAccumulating() throws IOException {
     SparkPipelineOptions options = commonOptions.withTmpCheckpointDir(checkpointParentDir);
     Pipeline p = Pipeline.create(options);
+    options.setJobName(testName.getMethodName());
     Duration batchDuration = Duration.millis(options.getBatchIntervalMillis());
 
     Instant instant = new Instant(0);
@@ -168,6 +169,7 @@ public class StreamingTests implements Serializable {
   public void testDiscardingMode() throws IOException {
     SparkPipelineOptions options = commonOptions.withTmpCheckpointDir(checkpointParentDir);
     Pipeline p = Pipeline.create(options);
+    options.setJobName(testName.getMethodName());
     Duration batchDuration = Duration.millis(options.getBatchIntervalMillis());
 
     @SuppressWarnings("unchecked")
