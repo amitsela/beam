@@ -34,7 +34,6 @@ import org.apache.beam.runners.spark.coders.CoderHelpers;
 import org.apache.beam.runners.spark.translation.streaming.utils.EmbeddedKafkaCluster;
 import org.apache.beam.runners.spark.translation.streaming.utils.ReuseSparkContext;
 import org.apache.beam.runners.spark.translation.streaming.utils.SparkTestPipelineOptionsForStreaming;
-import org.apache.beam.runners.spark.util.GlobalWatermarkHolder;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.InstantCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
@@ -86,9 +85,6 @@ public class ResumeFromCheckpointStreamingTest {
   @Rule
   public SparkTestPipelineOptionsForStreaming commonOptions =
       new SparkTestPipelineOptionsForStreaming();
-
-  @Rule
-  public ClearAggregatorsRule clearAggregatorsRule = new ClearAggregatorsRule();
 
   @Rule
   public ReuseSparkContext noContextResue = ReuseSparkContext.no();
@@ -147,16 +143,12 @@ public class ResumeFromCheckpointStreamingTest {
     assertThat(String.format("Expected %d processed messages count but "
         + "found %d", 4, processedMessages1), processedMessages1, equalTo(4L));
 
-    // clear broadcasts and accumulators.
-    GlobalWatermarkHolder.clear();
-
     // write a bit more.
     produce(ImmutableMap.of(
         "k5", new Instant(499)
     ));
 
     // recovery should resume from last read offset, and read the second batch of input.
-    System.out.println("### run again!");
     res = runAgain(options);
     res.waitUntilFinish(Duration.standardSeconds(2));
     long processedMessages2 = res.getAggregatorValue("processedMessages", Long.class);
@@ -165,7 +157,6 @@ public class ResumeFromCheckpointStreamingTest {
   }
 
   private SparkPipelineResult runAgain(SparkPipelineOptions options) {
-    clearAggregatorsRule.clearNamedAggregators();
     // sleep before next run.
     Uninterruptibles.sleepUninterruptibly(10, TimeUnit.MILLISECONDS);
     return run(options);
