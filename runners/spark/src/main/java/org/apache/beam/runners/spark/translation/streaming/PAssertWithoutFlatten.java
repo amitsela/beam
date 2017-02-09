@@ -39,7 +39,6 @@ public class PAssertWithoutFlatten extends PTransform<PCollection<Long>, PDone> 
     @ProcessElement
     public void processElement(ProcessContext c) throws Exception {
       try {
-        System.out.println("Assert output: " + c.element());
         assertThat(c.element(), isIn(possibleResults));
         success.addValue(1);
       } catch (Throwable t) {
