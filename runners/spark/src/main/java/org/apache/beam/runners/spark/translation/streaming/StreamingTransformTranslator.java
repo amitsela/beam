@@ -17,7 +17,6 @@
  */
 package org.apache.beam.runners.spark.translation.streaming;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static org.apache.beam.runners.spark.translation.TranslationUtils.rejectStateAndTimers;
 
@@ -30,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.LinkedBlockingQueue;
 import org.apache.beam.runners.spark.aggregators.NamedAggregators;
 import org.apache.beam.runners.spark.aggregators.SparkAggregators;
 import org.apache.beam.runners.spark.coders.CoderHelpers;
@@ -73,8 +73,8 @@ import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.PCollectionList;
 import org.apache.beam.sdk.values.PCollectionTuple;
-import org.apache.beam.sdk.values.TaggedPValue;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.spark.Accumulator;
 import org.apache.spark.api.java.JavaPairRDD;
@@ -136,44 +136,27 @@ final class StreamingTransformTranslator {
       @SuppressWarnings("unchecked")
       @Override
       public void evaluate(Flatten.FlattenPCollectionList<T> transform, EvaluationContext context) {
-        List<TaggedPValue> pcs = context.getInput(transform).expand();
+        PCollectionList<T> pcs = context.getInput(transform);
         // since this is a streaming pipeline, at least one of the PCollections to "flatten" are
         // unbounded, meaning it represents a DStream.
         // So we could end up with an unbounded unified DStream.
-        final List<JavaRDD<WindowedValue<T>>> rdds = new ArrayList<>();
         final List<JavaDStream<WindowedValue<T>>> dStreams = new ArrayList<>();
-        for (TaggedPValue pv : pcs) {
-          checkArgument(
-              pv.getValue() instanceof PCollection,
-              "Flatten had non-PCollection value in input: %s of type %s",
-              pv.getValue(),
-              pv.getValue().getClass().getSimpleName());
-          PCollection<T> pcol = (PCollection<T>) pv.getValue();
-          Dataset dataset = context.borrowDataset(pcol);
+        for (PCollection<T> pcol : pcs.getAll()) {
+         Dataset dataset = context.borrowDataset(pcol);
           if (dataset instanceof UnboundedDataset) {
             dStreams.add(((UnboundedDataset<T>) dataset).getDStream());
           } else {
-            rdds.add(((BoundedDataset<T>) dataset).getRDD());
+            // create a single RDD stream.
+            Queue<JavaRDD<WindowedValue<T>>> q = new LinkedBlockingQueue<>();
+            q.offer(((BoundedDataset) dataset).getRDD());
+            JavaDStream<WindowedValue<T>> dStream = context.getStreamingContext().queueStream(q);
+            dStreams.add(dStream);
           }
         }
         // start by unifying streams into a single stream.
         JavaDStream<WindowedValue<T>> unifiedStreams =
             context.getStreamingContext().union(dStreams.remove(0), dStreams);
-        // now unify in RDDs.
-        if (rdds.size() > 0) {
-          JavaDStream<WindowedValue<T>> joined =
-              unifiedStreams.transform(
-                  new Function<JavaRDD<WindowedValue<T>>, JavaRDD<WindowedValue<T>>>() {
-                    @Override
-                    public JavaRDD<WindowedValue<T>> call(JavaRDD<WindowedValue<T>> streamRdd)
-                        throws Exception {
-                      return new JavaSparkContext(streamRdd.context()).union(streamRdd, rdds);
-                    }
-                  });
-          context.putDataset(transform, new UnboundedDataset<>(joined));
-        } else {
-          context.putDataset(transform, new UnboundedDataset<>(unifiedStreams));
-        }
+        context.putDataset(transform, new UnboundedDataset<>(unifiedStreams));
       }
     };
   }
