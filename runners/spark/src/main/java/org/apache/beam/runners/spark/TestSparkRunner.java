@@ -25,6 +25,7 @@ import java.io.File;
 import java.io.IOException;
 
 import org.apache.beam.runners.core.UnboundedReadFromBoundedSource;
+import org.apache.beam.runners.spark.translation.streaming.PAssertWithoutFlatten;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.BoundedReadFromUnboundedSource;
 import org.apache.beam.sdk.options.PipelineOptions;
@@ -100,7 +101,8 @@ public final class TestSparkRunner extends PipelineRunner<SparkPipelineResult> {
       // no actual override, simply counts asserting transforms in the pipeline.
       if (transform instanceof PAssert.OneSideInputAssert
           || transform instanceof PAssert.GroupThenAssert
-          || transform instanceof PAssert.GroupThenAssertForSingleton) {
+          || transform instanceof PAssert.GroupThenAssertForSingleton
+          || transform instanceof PAssertWithoutFlatten) {
         expectedNumberOfAssertions += 1;
       }
 
