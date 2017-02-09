@@ -38,6 +38,8 @@ public class SparkTestPipelineOptionsForStreaming extends SparkTestPipelineOptio
     options.setForceStreaming(true);
     // set the default timeout to X batches.
     Duration batchDuration = Duration.millis(options.getBatchIntervalMillis());
+    // set the checkpoint duration to match interval.
+    options.setCheckpointDurationMillis(batchDuration.getMillis());
     long forcedTimeout = batchDuration.multipliedBy(DEFAULT_NUMBER_OF_BATCHES_TIMEOUT).getMillis();
     options.setForcedTimeout(forcedTimeout);
     return options;
