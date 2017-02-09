@@ -14,7 +14,8 @@ import org.apache.beam.sdk.values.PDone;
 
 
 /**
- * Created by ansela on 2/9/17.
+ * A custom PAssert that avoids using {@link org.apache.beam.sdk.transforms.Flatten}
+ * until BEAM-1444 is resolved.
  */
 public class PAssertWithoutFlatten extends PTransform<PCollection<Long>, PDone> {
 
@@ -26,9 +27,9 @@ public class PAssertWithoutFlatten extends PTransform<PCollection<Long>, PDone> 
 
   private static class AssertDoFn extends DoFn<Long, Void> {
     private final Aggregator<Integer, Integer> success =
-            createAggregator(PAssert.SUCCESS_COUNTER, Sum.ofIntegers());
+        createAggregator(PAssert.SUCCESS_COUNTER, Sum.ofIntegers());
     private final Aggregator<Integer, Integer> failure =
-            createAggregator(PAssert.FAILURE_COUNTER, Sum.ofIntegers());
+        createAggregator(PAssert.FAILURE_COUNTER, Sum.ofIntegers());
     private final Long[] possibleResults;
 
     AssertDoFn(Long... possibleResults) {
