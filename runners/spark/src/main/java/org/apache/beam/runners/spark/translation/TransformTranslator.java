@@ -548,7 +548,7 @@ public final class TransformTranslator {
         @SuppressWarnings("unchecked")
         Iterable<WindowedValue<?>> iterCast =  (Iterable<WindowedValue<?>>) iter;
 
-        context.putPView(output, iterCast, coderInternal);
+        SparkPCollectionView.get().putPView(output, iterCast, coderInternal);
       }
     };
   }
@@ -565,7 +565,7 @@ public final class TransformTranslator {
         @SuppressWarnings("unchecked")
         Iterable<WindowedValue<?>> iterCast =  (Iterable<WindowedValue<?>>) iter;
 
-        context.putPView(output, iterCast, coderInternal);
+        SparkPCollectionView.get().putPView(output, iterCast, coderInternal);
       }
     };
   }
@@ -584,7 +584,7 @@ public final class TransformTranslator {
         @SuppressWarnings("unchecked")
         Iterable<WindowedValue<?>> iterCast =  (Iterable<WindowedValue<?>>) iter;
 
-        context.putPView(output, iterCast, coderInternal);
+        SparkPCollectionView.get().putPView(output, iterCast, coderInternal);
       }
     };
   }
@@ -625,8 +625,8 @@ public final class TransformTranslator {
     EVALUATORS.put(Combine.PerKey.class, combinePerKey());
     EVALUATORS.put(Flatten.FlattenPCollectionList.class, flattenPColl());
     EVALUATORS.put(Create.Values.class, create());
-    EVALUATORS.put(View.AsSingleton.class, viewAsSingleton());
-    EVALUATORS.put(View.AsIterable.class, viewAsIter());
+//    EVALUATORS.put(View.AsSingleton.class, viewAsSingleton());
+//    EVALUATORS.put(View.AsIterable.class, viewAsIter());
     EVALUATORS.put(View.CreatePCollectionView.class, createPCollView());
     EVALUATORS.put(Window.Bound.class, window());
     // mostly test evaluators
@@ -644,20 +644,14 @@ public final class TransformTranslator {
     }
 
     @Override
-    public <TransformT extends PTransform<?, ?>> TransformEvaluator<TransformT>
-        translateBounded (Class<TransformT> clazz) {
-      @SuppressWarnings("unchecked") TransformEvaluator<TransformT> transformEvaluator =
+    public <TransformT extends PTransform<?, ?>> TransformEvaluator<TransformT> translate(
+        Class<TransformT> clazz) {
+      @SuppressWarnings("unchecked")
+      TransformEvaluator<TransformT> transformEvaluator =
           (TransformEvaluator<TransformT>) EVALUATORS.get(clazz);
       checkState(transformEvaluator != null,
           "No TransformEvaluator registered for BOUNDED transform %s", clazz);
       return transformEvaluator;
-    }
-
-    @Override
-    public <TransformT extends PTransform<?, ?>> TransformEvaluator<TransformT>
-        translateUnbounded(Class<TransformT> clazz) {
-      throw new IllegalStateException("TransformTranslator used in a batch pipeline only "
-          + "supports BOUNDED transforms.");
     }
   }
 }

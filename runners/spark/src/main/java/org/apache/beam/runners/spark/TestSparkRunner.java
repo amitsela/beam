@@ -21,20 +21,15 @@ package org.apache.beam.runners.spark;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 
-import org.apache.beam.runners.core.UnboundedReadFromBoundedSource;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult.State;
-import org.apache.beam.sdk.io.BoundedReadFromUnboundedSource;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsValidator;
+import org.apache.beam.sdk.options.StreamingOptions;
 import org.apache.beam.sdk.runners.PipelineRunner;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipelineOptions;
 import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.util.ValueWithRecordId;
-import org.apache.beam.sdk.values.PBegin;
-import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
 
@@ -63,12 +58,10 @@ import org.apache.beam.sdk.values.POutput;
 public final class TestSparkRunner extends PipelineRunner<SparkPipelineResult> {
 
   private SparkRunner delegate;
-  private boolean isForceStreaming;
   private int expectedNumberOfAssertions = 0;
 
   private TestSparkRunner(SparkPipelineOptions options) {
     this.delegate = SparkRunner.fromOptions(options);
-    this.isForceStreaming = options.isForceStreaming();
   }
 
   public static TestSparkRunner fromOptions(PipelineOptions options) {
@@ -85,22 +78,13 @@ public final class TestSparkRunner extends PipelineRunner<SparkPipelineResult> {
   @Override
   public <OutputT extends POutput, InputT extends PInput> OutputT apply(
           PTransform<InputT, OutputT> transform, InputT input) {
-    // if the pipeline forces execution as a streaming pipeline,
-    // and the source is an adapted unbounded source (as bounded),
-    // read it as unbounded source via UnboundedReadFromBoundedSource.
-    if (isForceStreaming && transform instanceof BoundedReadFromUnboundedSource) {
-      return (OutputT) delegate.apply(new AdaptedBoundedAsUnbounded(
-          (BoundedReadFromUnboundedSource) transform), input);
-    } else {
-      // no actual override, simply counts asserting transforms in the pipeline.
-      if (transform instanceof PAssert.OneSideInputAssert
-          || transform instanceof PAssert.GroupThenAssert
-          || transform instanceof PAssert.GroupThenAssertForSingleton) {
-        expectedNumberOfAssertions += 1;
-      }
-
-      return delegate.apply(transform, input);
+    // no actual override, simply counts asserting transforms in the pipeline.
+    if (transform instanceof PAssert.OneSideInputAssert
+        || transform instanceof PAssert.GroupThenAssert
+        || transform instanceof PAssert.GroupThenAssertForSingleton) {
+      expectedNumberOfAssertions += 1;
     }
+    return delegate.apply(transform, input);
   }
 
   @Override
@@ -119,7 +103,8 @@ public final class TestSparkRunner extends PipelineRunner<SparkPipelineResult> {
     assertThat(result, testPipelineOptions.getOnSuccessMatcher());
 
     // if the pipeline was executed in streaming mode, validate aggregators.
-    if (isForceStreaming) {
+    StreamingOptions streamingOptions = pipeline.getOptions().as(StreamingOptions.class);
+    if (streamingOptions.isStreaming()) {
       // validate assertion succeeded (at least once).
       int success = result.getAggregatorValue(PAssert.SUCCESS_COUNTER, Integer.class);
       assertThat(
@@ -133,23 +118,6 @@ public final class TestSparkRunner extends PipelineRunner<SparkPipelineResult> {
       assertThat("Failure aggregator should be zero.", failure, is(0));
     }
     return result;
-  }
-
-  private static class AdaptedBoundedAsUnbounded<T> extends PTransform<PBegin, PCollection<T>> {
-    private final BoundedReadFromUnboundedSource<T> source;
-
-    AdaptedBoundedAsUnbounded(BoundedReadFromUnboundedSource<T> source) {
-      this.source = source;
-    }
-
-    @SuppressWarnings("unchecked")
-    @Override
-    public PCollection<T> expand(PBegin input) {
-      PTransform<PBegin, ? extends PCollection<ValueWithRecordId<T>>> replacingTransform =
-          new UnboundedReadFromBoundedSource<>(source.getAdaptedSource());
-      return (PCollection<T>) input.apply(replacingTransform)
-          .apply("StripIds", ParDo.of(new ValueWithRecordId.StripIdsDoFn()));
-    }
   }
 
 }

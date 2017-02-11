@@ -34,7 +34,6 @@ import org.apache.beam.sdk.transforms.AppliedPTransform;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.PValue;
 import org.apache.beam.sdk.values.TaggedPValue;
 import org.apache.spark.api.java.JavaRDD;
@@ -56,7 +55,6 @@ public class EvaluationContext {
   private final Set<PValue> multiReads = new LinkedHashSet<>();
   private final Map<PValue, Object> pobjects = new LinkedHashMap<>();
   private AppliedPTransform<?, ?, ?> currentTransform;
-  private final SparkPCollectionView pviews = new SparkPCollectionView();
 
   public EvaluationContext(JavaSparkContext jsc, Pipeline pipeline) {
     this.jsc = jsc;
@@ -185,41 +183,6 @@ public class EvaluationContext {
       return res;
     }
     throw new IllegalStateException("Cannot resolve un-known PObject: " + value);
-  }
-
-  /**
-   * Retrieves an iterable of results associated with the PCollection passed in.
-   *
-   * @param pcollection Collection we wish to translate.
-   * @param <T>         Type of elements contained in collection.
-   * @return Natively types result associated with collection.
-   */
-  <T> Iterable<T> get(PCollection<T> pcollection) {
-    Iterable<WindowedValue<T>> windowedValues = getWindowedValues(pcollection);
-    return Iterables.transform(windowedValues, WindowingHelpers.<T>unwindowValueFunction());
-  }
-
-  /**
-   * Retrun the current views creates in the pipepline.
-   *
-   * @return SparkPCollectionView
-   */
-  public SparkPCollectionView getPViews() {
-    return pviews;
-  }
-
-  /**
-   * Adds/Replaces a view to the current views creates in the pipepline.
-   *
-   * @param view - Identifier of the view
-   * @param value - Actual value of the view
-   * @param coder - Coder of the value
-   */
-  public void putPView(
-      PCollectionView<?> view,
-      Iterable<WindowedValue<?>> value,
-      Coder<Iterable<WindowedValue<?>>> coder) {
-    pviews.putPView(view, value, coder);
   }
 
   <T> Iterable<WindowedValue<T>> getWindowedValues(PCollection<T> pcollection) {

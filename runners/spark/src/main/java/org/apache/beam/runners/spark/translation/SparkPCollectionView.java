@@ -32,68 +32,76 @@ import scala.Tuple2;
  * SparkPCollectionView is used to pass serialized views to lambdas.
  */
 public class SparkPCollectionView implements Serializable {
+  private static final SparkPCollectionView INSTANCE = new SparkPCollectionView();
 
-    // Holds the view --> broadcast mapping. Transient so it will be null from resume
-    private transient volatile Map<PCollectionView<?>, SideInputBroadcast>
-        broadcastHelperMap = null;
+  private SparkPCollectionView() { }
 
-    // Holds the Actual data of the views in serialize form
-    private Map<PCollectionView<?>,
-        Tuple2<byte[], Coder<Iterable<WindowedValue<?>>>>> pviews =
-            new LinkedHashMap<>();
+  public static SparkPCollectionView get() {
+      return INSTANCE;
+  }
 
-    // Driver only - during evaluation stage
-    void putPView(
-        PCollectionView<?> view,
-        Iterable<WindowedValue<?>> value,
-        Coder<Iterable<WindowedValue<?>>> coder) {
+  // Holds the view --> broadcast mapping. Transient so it will be null from resume
+  private transient volatile Map<PCollectionView<?>, SideInputBroadcast>
+      broadcastHelperMap = null;
 
-        pviews.put(view, new Tuple2<>(CoderHelpers.toByteArray(value, coder), coder));
+  // Holds the Actual data of the views in serialize form
+  private Map<PCollectionView<?>, Tuple2<byte[], Coder<Iterable<WindowedValue<?>>>>> pviews =
+      new LinkedHashMap<>();
 
-        // Currently unsynchronized unpersist, if needed can be changed to blocking
-        if (broadcastHelperMap != null) {
-            synchronized (SparkPCollectionView.class) {
-                SideInputBroadcast helper = broadcastHelperMap.get(view);
-                if (helper != null) {
-                    helper.unpersist();
-                    broadcastHelperMap.remove(view);
-                }
+  // Driver only - during evaluation stage
+  public void putPView(
+      PCollectionView<?> view,
+      Iterable<WindowedValue<?>> value,
+      Coder<Iterable<WindowedValue<?>>> coder) {
+
+     pviews.put(view, new Tuple2<>(CoderHelpers.toByteArray(value, coder), coder));
+
+     // Currently unsynchronized unpersist, if needed can be changed to blocking
+     if (broadcastHelperMap != null) {
+         synchronized (SparkPCollectionView.class) {
+             SideInputBroadcast helper = broadcastHelperMap.get(view);
+             if (helper != null) {
+                 helper.unpersist();
+                 broadcastHelperMap.remove(view);
+             }
+         }
+     }
+  }
+
+  SideInputBroadcast getPCollectionView(PCollectionView<?> view, JavaSparkContext context) {
+
+    // initialize broadcastHelperMap if needed
+    if (broadcastHelperMap == null) {
+        synchronized (SparkPCollectionView.class) {
+            if (broadcastHelperMap == null) {
+                broadcastHelperMap = new LinkedHashMap<>();
             }
         }
     }
 
-    SideInputBroadcast getPCollectionView(
-        PCollectionView<?> view,
-        JavaSparkContext context) {
-        // initialize broadcastHelperMap if needed
-        if (broadcastHelperMap == null) {
-            synchronized (SparkPCollectionView.class) {
-                if (broadcastHelperMap == null) {
-                    broadcastHelperMap = new LinkedHashMap<>();
-                }
+    //lazily broadcast views
+    SideInputBroadcast helper = broadcastHelperMap.get(view);
+    if (helper == null) {
+        synchronized (SparkPCollectionView.class) {
+            helper = broadcastHelperMap.get(view);
+            if (helper == null) {
+                helper = createBroadcastHelper(view, context);
             }
         }
-
-        //lazily broadcast views
-        SideInputBroadcast helper = broadcastHelperMap.get(view);
-        if (helper == null) {
-            synchronized (SparkPCollectionView.class) {
-                helper = broadcastHelperMap.get(view);
-                if (helper == null) {
-                    helper = createBroadcastHelper(view, context);
-                }
-            }
-        }
-        return helper;
     }
 
-    private SideInputBroadcast createBroadcastHelper(
-        PCollectionView<?> view,
-        JavaSparkContext context) {
-        Tuple2<byte[], Coder<Iterable<WindowedValue<?>>>> tuple2 = pviews.get(view);
-        SideInputBroadcast helper = SideInputBroadcast.create(tuple2._1, tuple2._2);
-        helper.broadcast(context);
-        broadcastHelperMap.put(view, helper);
-        return helper;
-    }
+    return helper;
+  }
+
+  private SideInputBroadcast createBroadcastHelper(
+      PCollectionView<?> view,
+      JavaSparkContext context) {
+    Tuple2<byte[], Coder<Iterable<WindowedValue<?>>>> dataAndCoder = pviews.get(view);
+    SideInputBroadcast helper = dataAndCoder == null
+        ? SideInputBroadcast.EmptySideInputBroadcast.of()
+        : SideInputBroadcast.create(dataAndCoder._1(), dataAndCoder._2());
+    helper.broadcast(context);
+    broadcastHelperMap.put(view, helper);
+    return helper;
+  }
 }

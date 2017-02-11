@@ -27,15 +27,17 @@ import org.apache.spark.broadcast.Broadcast;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import scala.Tuple2;
+
 /**
  * Broadcast helper for side inputs. Helps to do the transformation from
  * bytes transform to broadcast transform to value by coder
  */
 public class SideInputBroadcast<T> implements Serializable {
-
   private static final Logger LOG = LoggerFactory.getLogger(SideInputBroadcast.class);
-  private Broadcast<byte[]> bcast;
-  private final Coder<T> coder;
+
+  private Broadcast<Tuple2<byte[], Coder<T>>> bcast;
+  private transient Coder<T> coder;
   private transient T value;
   private transient byte[] bytes = null;
 
@@ -56,7 +58,7 @@ public class SideInputBroadcast<T> implements Serializable {
   }
 
   public void broadcast(JavaSparkContext jsc) {
-    this.bcast = jsc.broadcast(bytes);
+    this.bcast = jsc.broadcast(new Tuple2<>(bytes, coder));
   }
 
   public void unpersist() {
@@ -64,9 +66,11 @@ public class SideInputBroadcast<T> implements Serializable {
   }
 
   private T deserialize() {
+    byte[] ser = bcast.getValue()._1();
+    Coder<T> coder = bcast.getValue()._2();
     T val;
     try {
-      val = coder.decode(new ByteArrayInputStream(bcast.value()), new Coder.Context(true));
+      val = coder.decode(new ByteArrayInputStream(ser), new Coder.Context(true));
     } catch (IOException ioe) {
       // this should not ever happen, log it if it does.
       LOG.warn(ioe.getMessage());
@@ -74,4 +78,21 @@ public class SideInputBroadcast<T> implements Serializable {
     }
     return val;
   }
+
+  public static class EmptySideInputBroadcast<T> extends SideInputBroadcast<T> {
+
+    private EmptySideInputBroadcast(byte[] bytes, Coder<T> coder) {
+      super(bytes, coder);
+    }
+
+    public static <T> SideInputBroadcast<T> of() {
+      return new EmptySideInputBroadcast<>(null, null);
+    }
+
+    @Override
+    public synchronized T getValue() {
+      return null;
+    }
+  }
+
 }

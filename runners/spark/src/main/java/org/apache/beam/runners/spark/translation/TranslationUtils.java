@@ -192,7 +192,7 @@ public final class TranslationUtils {
    */
   static Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, SideInputBroadcast<?>>>
   getSideInputs(List<PCollectionView<?>> views, EvaluationContext context) {
-    return getSideInputs(views, context.getSparkContext(), context.getPViews());
+    return getSideInputs(views, context.getSparkContext(), SparkPCollectionView.get());
   }
 
   /**
