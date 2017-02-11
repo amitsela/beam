@@ -17,6 +17,8 @@
  */
 package org.apache.beam.runners.spark.io;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.LinkedList;
@@ -27,6 +29,7 @@ import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.TimestampedValue;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
 
@@ -43,7 +46,7 @@ public final class CreateStream<T> extends PTransform<PBegin, PCollection<T>> {
   private final Queue<Iterable<T>> batches = new LinkedList<>();
   private final Deque<MicrobatchTime> times = new LinkedList<>();
 
-  private Instant lowWatermark = new Instant(0);
+  private Instant lowWatermark = BoundedWindow.TIMESTAMP_MIN_VALUE; //for test purposes.
 
   private CreateStream(Duration batchInterval, Instant initialSystemTime) {
     this.batchInterval = batchInterval;
@@ -55,37 +58,64 @@ public final class CreateStream<T> extends PTransform<PBegin, PCollection<T>> {
     return new CreateStream<>(batchInterval, new Instant(0));
   }
 
-  /** Set the initial wall time. */
+  /**
+   * Enqueue next micro-batch elements.
+   * This is backed by a {@link Queue} so stream input order would keep the population order (FIFO).
+   */
+  @SafeVarargs
+  public final CreateStream<T> nextBatch(T... batchElements) {
+    // validate timestamps if timestamped elements.
+    for (T element: batchElements) {
+      if (element instanceof TimestampedValue) {
+        TimestampedValue timestampedValue = (TimestampedValue) element;
+        checkArgument(
+                timestampedValue.getTimestamp().isBefore(BoundedWindow.TIMESTAMP_MAX_VALUE),
+                "Elements must have timestamps before %s. Got: %s",
+                BoundedWindow.TIMESTAMP_MAX_VALUE,
+                timestampedValue.getTimestamp());
+      }
+    }
+    batches.offer(Arrays.asList(batchElements));
+    return this;
+  }
+
+  /** Set the initial synchronized processing time. */
   public CreateStream<T> initialSystemTimeAt(Instant initialSystemTime) {
     return new CreateStream<>(batchInterval, initialSystemTime);
   }
 
   /**
-   * Enqueue next micro-batch values.
-   * This is backed by a {@link Queue} so stream input order would keep the population order (FIFO).
-   */
-  public CreateStream<T> nextBatch(T... batchValues) {
-    batches.offer(Arrays.asList(batchValues));
-    return this;
-  }
-
-  /**
    * Advances the watermark in the next batch.
    */
-  public CreateStream<T> advanceWatermarkForNextBatch(Instant watermark) {
-    // move the system time.
-    Instant nextSynchronizedProcessingTime = times.peekLast() == null ? initialSystemTime
-        : times.peekLast().getSynchronizedProcessingTime().plus(batchInterval);
-    times.offer(new MicrobatchTime(-1, lowWatermark, watermark, nextSynchronizedProcessingTime));
-    lowWatermark = watermark;
-    return this;
+  public CreateStream<T> advanceWatermarkForNextBatch(Instant newWatermark) {
+    checkArgument(
+        !newWatermark.isBefore(lowWatermark), "The watermark is not allowed to decrease!");
+    checkArgument(
+        newWatermark.isBefore(BoundedWindow.TIMESTAMP_MAX_VALUE),
+        "The Watermark cannot progress beyond the maximum. Got: %s. Maximum: %s",
+        newWatermark,
+        BoundedWindow.TIMESTAMP_MAX_VALUE);
+    return advance(newWatermark);
   }
 
   /**
    * Advances the watermark in the next batch to the end-of-time.
    */
   public CreateStream<T> advanceNextBatchWatermarkToInfinity() {
-    return advanceWatermarkForNextBatch(BoundedWindow.TIMESTAMP_MAX_VALUE);
+    return advance(BoundedWindow.TIMESTAMP_MAX_VALUE);
+  }
+
+  private CreateStream<T> advance(Instant newWatermark) {
+    // advance the system time.
+    Instant currentSynchronizedProcessingTime = times.peekLast() == null ? initialSystemTime
+        : times.peekLast().getSynchronizedProcessingTime();
+    Instant nextSynchronizedProcessingTime = currentSynchronizedProcessingTime.plus(batchInterval);
+    checkArgument(
+        nextSynchronizedProcessingTime.isAfter(currentSynchronizedProcessingTime),
+        "Synchronized processing time must always advance.");
+    times.offer(new MicrobatchTime(-1, lowWatermark, newWatermark, nextSynchronizedProcessingTime));
+    lowWatermark = newWatermark;
+    return this;
   }
 
   /** Get the underlying queue representing the mock stream of micro-batches. */
