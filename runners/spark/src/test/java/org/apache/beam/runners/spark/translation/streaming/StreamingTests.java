@@ -27,7 +27,10 @@ import org.apache.beam.sdk.transforms.WithKeys;
 import org.apache.beam.sdk.transforms.windowing.AfterPane;
 import org.apache.beam.sdk.transforms.windowing.AfterProcessingTime;
 import org.apache.beam.sdk.transforms.windowing.AfterWatermark;
+import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
+import org.apache.beam.sdk.transforms.windowing.DefaultTrigger;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
+import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.IntervalWindow;
 import org.apache.beam.sdk.transforms.windowing.Never;
 import org.apache.beam.sdk.transforms.windowing.Window;
@@ -71,7 +74,6 @@ public class StreamingTests implements Serializable {
     Duration batchDuration = Duration.millis(options.getBatchIntervalMillis());
 
     Instant instant = new Instant(0);
-    @SuppressWarnings("unchecked")
     CreateStream<TimestampedValue<Integer>> source =
         CreateStream.<TimestampedValue<Integer>>withBatchInterval(batchDuration)
             .nextBatch()
@@ -172,7 +174,6 @@ public class StreamingTests implements Serializable {
     options.setJobName(testName.getMethodName());
     Duration batchDuration = Duration.millis(options.getBatchIntervalMillis());
 
-    @SuppressWarnings("unchecked")
     CreateStream<TimestampedValue<String>> source =
         CreateStream.<TimestampedValue<String>>withBatchInterval(batchDuration)
             .nextBatch(
@@ -220,113 +221,140 @@ public class StreamingTests implements Serializable {
     p.run();
   }
 
-//  @Test
-//  @Category({NeedsRunner.class, UsesTestStream.class})
-//  public void testFirstElementLate() {
-//    Instant lateElementTimestamp = new Instant(-1_000_000);
-//    TestStream<String> stream =
-//            TestStream.create(StringUtf8Coder.of())
-//                    .advanceWatermarkTo(new Instant(0))
-//                    .addElements(TimestampedValue.of("late", lateElementTimestamp))
-//                    .addElements(TimestampedValue.of("onTime", new Instant(100)))
-//                    .advanceWatermarkToInfinity();
-//
-//    FixedWindows windowFn = FixedWindows.of(Duration.millis(1000L));
-//    Duration allowedLateness = Duration.millis(5000L);
-//    PCollection<String> values = p.apply(stream)
-//            .apply(Window.<String>into(windowFn).triggering(DefaultTrigger.of())
-//                    .discardingFiredPanes()
-//                    .withAllowedLateness(allowedLateness))
-//            .apply(WithKeys.<Integer, String>of(1))
-//            .apply(GroupByKey.<Integer, String>create())
-//            .apply(Values.<Iterable<String>>create())
-//            .apply(Flatten.<String>iterables());
-//
+  @Test
+  public void testFirstElementLate() throws IOException {
+    SparkPipelineOptions options = commonOptions.withTmpCheckpointDir(checkpointParentDir);
+    Pipeline p = Pipeline.create(options);
+    options.setJobName(testName.getMethodName());
+    Duration batchDuration = Duration.millis(options.getBatchIntervalMillis());
+
+    Instant lateElementTimestamp = new Instant(-1_000_000);
+    CreateStream<TimestampedValue<String>> source =
+        CreateStream.<TimestampedValue<String>>withBatchInterval(batchDuration)
+            .nextBatch()
+            .advanceWatermarkForNextBatch(new Instant(-1_000_000))
+            .nextBatch(
+                TimestampedValue.of("late", lateElementTimestamp),
+                TimestampedValue.of("onTime", new Instant(100)))
+            .advanceNextBatchWatermarkToInfinity();
+
+    FixedWindows windowFn = FixedWindows.of(Duration.millis(1000L));
+    Duration allowedLateness = Duration.millis(5000L);
+    PCollection<String> values = p.apply(source)
+            .setCoder(TimestampedValue.TimestampedValueCoder.of(StringUtf8Coder.of()))
+        .apply(ParDo.of(new OnlyValue<String>()))
+        .apply(Window.<String>into(windowFn).triggering(DefaultTrigger.of())
+            .discardingFiredPanes()
+            .withAllowedLateness(allowedLateness))
+        .apply(WithKeys.<Integer, String>of(1))
+        .apply(GroupByKey.<Integer, String>create())
+        .apply(Values.<Iterable<String>>create())
+        .apply(Flatten.<String>iterables());
+
+    //TODO: empty panes do not emmit anything so Spark won't evaluate an "empty" assertion.
 //    PAssert.that(values).inWindow(windowFn.assignWindow(lateElementTimestamp)).empty();
-//    PAssert.that(values)
-//            .inWindow(windowFn.assignWindow(new Instant(100)))
-//            .containsInAnyOrder("onTime");
-//
-//    p.run();
-//  }
-//
+    PAssert.that(values)
+        .inWindow(windowFn.assignWindow(new Instant(100)))
+        .containsInAnyOrder("onTime");
+
+    p.run();
+  }
+
+  @Test
+  public void testElementsAtAlmostPositiveInfinity() throws IOException {
+    SparkPipelineOptions options = commonOptions.withTmpCheckpointDir(checkpointParentDir);
+    Pipeline p = Pipeline.create(options);
+    options.setJobName(testName.getMethodName());
+    Duration batchDuration = Duration.millis(options.getBatchIntervalMillis());
+
+    Instant endOfGlobalWindow = GlobalWindow.INSTANCE.maxTimestamp();
+    CreateStream<TimestampedValue<String>> source =
+        CreateStream.<TimestampedValue<String>>withBatchInterval(batchDuration)
+            .nextBatch(
+                TimestampedValue.of("foo", endOfGlobalWindow),
+                TimestampedValue.of("bar", endOfGlobalWindow))
+            .advanceNextBatchWatermarkToInfinity();
+
+    FixedWindows windows = FixedWindows.of(Duration.standardHours(6));
+    PCollection<String> windowedValues = p.apply(source)
+            .setCoder(TimestampedValue.TimestampedValueCoder.of(StringUtf8Coder.of()))
+        .apply(ParDo.of(new OnlyValue<String>()))
+        .apply(Window.<String>into(windows))
+        .apply(WithKeys.<Integer, String>of(1))
+        .apply(GroupByKey.<Integer, String>create())
+        .apply(Values.<Iterable<String>>create())
+        .apply(Flatten.<String>iterables());
+
+    PAssert.that(windowedValues)
+        .inWindow(windows.assignWindow(GlobalWindow.INSTANCE.maxTimestamp()))
+        .containsInAnyOrder("foo", "bar");
+    p.run();
+  }
+
 //  @Test
-//  @Category({NeedsRunner.class, UsesTestStream.class})
-//  public void testElementsAtAlmostPositiveInfinity() {
-//    Instant endOfGlobalWindow = GlobalWindow.INSTANCE.maxTimestamp();
-//    TestStream<String> stream = TestStream.create(StringUtf8Coder.of())
-//            .addElements(TimestampedValue.of("foo", endOfGlobalWindow),
-//                    TimestampedValue.of("bar", endOfGlobalWindow))
-//            .advanceWatermarkToInfinity();
+//  public void testMultipleStreams() throws IOException {
+//    SparkPipelineOptions options = commonOptions.withTmpCheckpointDir(checkpointParentDir);
+//    Pipeline p = Pipeline.create(options);
+//    options.setJobName(testName.getMethodName());
+//    Duration batchDuration = Duration.millis(options.getBatchIntervalMillis());
 //
-//    FixedWindows windows = FixedWindows.of(Duration.standardHours(6));
-//    PCollection<String> windowedValues = p.apply(stream)
-//            .apply(Window.<String>into(windows))
-//            .apply(WithKeys.<Integer, String>of(1))
-//            .apply(GroupByKey.<Integer, String>create())
-//            .apply(Values.<Iterable<String>>create())
-//            .apply(Flatten.<String>iterables());
+//    CreateStream<String> source =
+//        CreateStream.<String>withBatchInterval(batchDuration)
+//            .nextBatch("foo", "bar").advanceWatermarkForNextBatch(new Instant(100))
+//            .nextBatch().advanceNextBatchWatermarkToInfinity();
 //
-//    PAssert.that(windowedValues)
-//            .inWindow(windows.assignWindow(GlobalWindow.INSTANCE.maxTimestamp()))
-//            .containsInAnyOrder("foo", "bar");
-//    p.run();
-//  }
-//
-//  @Test
-//  @Category({NeedsRunner.class, UsesTestStream.class})
-//  public void testMultipleStreams() {
-//    TestStream<String> stream = TestStream.create(StringUtf8Coder.of())
-//            .addElements("foo", "bar")
-//            .advanceWatermarkToInfinity();
-//
-//    TestStream<Integer> other =
-//            TestStream.create(VarIntCoder.of()).addElements(1, 2, 3, 4).advanceWatermarkToInfinity();
+////    CreateStream<Integer> other =
+////        CreateStream.<Integer>withBatchInterval(batchDuration)
+////            .nextBatch(1, 2, 3, 4)
+////            .advanceNextBatchWatermarkToInfinity();
 //
 //    PCollection<String> createStrings =
-//            p.apply("CreateStrings", stream)
-//                    .apply("WindowStrings",
-//                            Window.<String>triggering(AfterPane.elementCountAtLeast(2))
-//                                    .withAllowedLateness(Duration.ZERO)
-//                                    .accumulatingFiredPanes());
+//        p.apply("CreateStrings", source).setCoder(StringUtf8Coder.of())
+//            .apply("WindowStrings",
+//                Window.<String>triggering(AfterPane.elementCountAtLeast(2))
+//                    .withAllowedLateness(Duration.ZERO)
+//                    .accumulatingFiredPanes());
 //    PAssert.that(createStrings).containsInAnyOrder("foo", "bar");
-//    PCollection<Integer> createInts =
-//            p.apply("CreateInts", other)
-//                    .apply("WindowInts",
-//                            Window.<Integer>triggering(AfterPane.elementCountAtLeast(4))
-//                                    .withAllowedLateness(Duration.ZERO)
-//                                    .accumulatingFiredPanes());
-//    PAssert.that(createInts).containsInAnyOrder(1, 2, 3, 4);
+////    PCollection<Integer> createInts =
+////        p.apply("CreateInts", other).setCoder(VarIntCoder.of())
+////            .apply("WindowInts",
+////                Window.<Integer>triggering(AfterPane.elementCountAtLeast(4))
+////                    .withAllowedLateness(Duration.ZERO)
+////                    .accumulatingFiredPanes());
+////    PAssert.that(createInts).containsInAnyOrder(1, 2, 3, 4);
 //
 //    p.run();
 //  }
-//
-//  @Test
-//  public void testElementAtPositiveInfinityThrows() {
-//    TestStream.Builder<Integer> stream =
-//            TestStream.create(VarIntCoder.of())
-//                    .addElements(TimestampedValue.of(-1, BoundedWindow.TIMESTAMP_MAX_VALUE.minus(1L)));
-//    thrown.expect(IllegalArgumentException.class);
-//    stream.addElements(TimestampedValue.of(1, BoundedWindow.TIMESTAMP_MAX_VALUE));
-//  }
-//
-//  @Test
-//  public void testAdvanceWatermarkNonMonotonicThrows() {
-//    TestStream.Builder<Integer> stream =
-//            TestStream.create(VarIntCoder.of())
-//                    .advanceWatermarkTo(new Instant(0L));
-//    thrown.expect(IllegalArgumentException.class);
-//    stream.advanceWatermarkTo(new Instant(-1L));
-//  }
-//
-//  @Test
-//  public void testAdvanceWatermarkEqualToPositiveInfinityThrows() {
-//    TestStream.Builder<Integer> stream =
-//            TestStream.create(VarIntCoder.of())
-//                    .advanceWatermarkTo(BoundedWindow.TIMESTAMP_MAX_VALUE.minus(1L));
-//    thrown.expect(IllegalArgumentException.class);
-//    stream.advanceWatermarkTo(BoundedWindow.TIMESTAMP_MAX_VALUE);
-//  }
+
+  @Test
+  public void testElementAtPositiveInfinityThrows() {
+    Duration batchDuration = Duration.millis(commonOptions.getOptions().getBatchIntervalMillis());
+    CreateStream<TimestampedValue<Integer>> source =
+        CreateStream.<TimestampedValue<Integer>>withBatchInterval(batchDuration)
+            .nextBatch(TimestampedValue.of(-1, BoundedWindow.TIMESTAMP_MAX_VALUE.minus(1L)));
+    thrown.expect(IllegalArgumentException.class);
+    source.nextBatch(TimestampedValue.of(1, BoundedWindow.TIMESTAMP_MAX_VALUE));
+  }
+
+  @Test
+  public void testAdvanceWatermarkNonMonotonicThrows() {
+    Duration batchDuration = Duration.millis(commonOptions.getOptions().getBatchIntervalMillis());
+    CreateStream<Integer> source =
+        CreateStream.<Integer>withBatchInterval(batchDuration)
+            .advanceWatermarkForNextBatch(new Instant(0L));
+    thrown.expect(IllegalArgumentException.class);
+    source.advanceWatermarkForNextBatch(new Instant(-1L));
+  }
+
+  @Test
+  public void testAdvanceWatermarkEqualToPositiveInfinityThrows() {
+    Duration batchDuration = Duration.millis(commonOptions.getOptions().getBatchIntervalMillis());
+    CreateStream<Integer> source =
+        CreateStream.<Integer>withBatchInterval(batchDuration)
+            .advanceWatermarkForNextBatch(BoundedWindow.TIMESTAMP_MAX_VALUE.minus(1L));
+    thrown.expect(IllegalArgumentException.class);
+    source.advanceWatermarkForNextBatch(BoundedWindow.TIMESTAMP_MAX_VALUE);
+  }
 
   private static class OnlyValue<T> extends DoFn<TimestampedValue<T>, T> {
 
