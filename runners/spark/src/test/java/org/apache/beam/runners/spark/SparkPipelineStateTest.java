@@ -26,10 +26,10 @@ import static org.junit.Assert.fail;
 
 import java.io.Serializable;
 import org.apache.beam.runners.spark.io.CreateStream;
-import org.apache.beam.runners.spark.translation.streaming.utils.SparkTestPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.MapElements;
@@ -55,8 +55,8 @@ public class SparkPipelineStateTest implements Serializable {
     }
   }
 
-  @Rule
-  public transient SparkTestPipelineOptions commonOptions = new SparkTestPipelineOptions();
+  private transient SparkPipelineOptions options =
+      PipelineOptionsFactory.as(SparkPipelineOptions.class);
 
   @Rule
   public transient TestName testName = new TestName();
@@ -80,13 +80,14 @@ public class SparkPipelineStateTest implements Serializable {
   }
 
   private SparkPipelineOptions getStreamingOptions() {
-    final SparkPipelineOptions options = commonOptions.getOptions();
+    options.setRunner(SparkRunner.class);
     options.setStreaming(true);
     return options;
   }
 
   private SparkPipelineOptions getBatchOptions() {
-    return commonOptions.getOptions();
+    options.setRunner(SparkRunner.class);
+    return options;
   }
 
   private Pipeline getPipeline(final SparkPipelineOptions options) {
@@ -120,7 +121,7 @@ public class SparkPipelineStateTest implements Serializable {
       result = (SparkPipelineResult) pipeline.run();
       result.waitUntilFinish();
     } catch (final Exception e) {
-      assertThat(e, instanceOf(Pipeline.PipelineExecutionException.class));
+//      assertThat(e.getCause(), instanceOf(Pipeline.PipelineExecutionException.class));
       assertThat(e.getCause(), instanceOf(MyCustomException.class));
       assertThat(e.getCause().getMessage(), is(FAILED_THE_BATCH_INTENTIONALLY));
       assertThat(result.getState(), is(PipelineResult.State.FAILED));
