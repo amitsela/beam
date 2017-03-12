@@ -18,13 +18,18 @@
 
 package org.apache.beam.runners.spark;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Iterables;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import org.apache.beam.runners.core.UnboundedReadFromBoundedSource;
+import org.apache.beam.runners.core.construction.PTransformMatchers;
+import org.apache.beam.runners.core.construction.ReplacementOutputs;
 import org.apache.beam.runners.spark.aggregators.AggregatorsAccumulator;
 import org.apache.beam.runners.spark.io.CreateStream;
 import org.apache.beam.runners.spark.metrics.AggregatorMetricSource;
@@ -40,16 +45,21 @@ import org.apache.beam.runners.spark.translation.streaming.Checkpoint.Checkpoint
 import org.apache.beam.runners.spark.translation.streaming.SparkRunnerStreamingContextFactory;
 import org.apache.beam.runners.spark.util.GlobalWatermarkHolder.WatermarksListener;
 import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.io.BoundedReadFromUnboundedSource;
 import org.apache.beam.sdk.io.Read;
 import org.apache.beam.sdk.metrics.MetricsEnvironment;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.options.PipelineOptionsValidator;
+import org.apache.beam.sdk.runners.PTransformOverrideFactory;
 import org.apache.beam.sdk.runners.PipelineRunner;
 import org.apache.beam.sdk.runners.TransformHierarchy;
 import org.apache.beam.sdk.transforms.AppliedPTransform;
 import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.PTransform;
+import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.util.ValueWithRecordId;
+import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.PInput;
@@ -147,6 +157,13 @@ public final class SparkRunner extends PipelineRunner<SparkPipelineResult> {
     detectTranslationMode(pipeline);
 
     if (mOptions.isStreaming()) {
+      // if the pipeline forces execution as a streaming pipeline explicitly, or because one
+      // of the sources is unbounded, reading from bounded sources should be done
+      // via UnboundedReadFromBoundedSource to ensure a streaming-only pipeline.
+      // this is forced on the runner because Spark cannot properly
+      // flatten/union batch and streaming branches in the same pipeline.
+      adaptBoundedReads(pipeline);
+
       CheckpointDir checkpointDir = new CheckpointDir(mOptions.getCheckpointDir());
       SparkRunnerStreamingContextFactory streamingContextFactory =
           new SparkRunnerStreamingContextFactory(pipeline, mOptions, checkpointDir);
@@ -449,6 +466,51 @@ public final class SparkRunner extends PipelineRunner<SparkPipelineResult> {
         }
       }
       return isBounded;
+    }
+  }
+
+  @VisibleForTesting
+  static void adaptBoundedReads(Pipeline pipeline) {
+    pipeline.replace(
+        PTransformMatchers.classEqualTo(BoundedReadFromUnboundedSource.class),
+        new AdaptedBoundedAsUnbounded.Factory());
+  }
+
+  private static class AdaptedBoundedAsUnbounded<T> extends PTransform<PBegin, PCollection<T>> {
+    private final BoundedReadFromUnboundedSource<T> source;
+
+    AdaptedBoundedAsUnbounded(BoundedReadFromUnboundedSource<T> source) {
+      this.source = source;
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public PCollection<T> expand(PBegin input) {
+      PTransform<PBegin, ? extends PCollection<ValueWithRecordId<T>>> replacingTransform =
+          new UnboundedReadFromBoundedSource<>(source.getAdaptedSource());
+      return (PCollection<T>) input.apply(replacingTransform)
+          .apply("StripIds", ParDo.of(new ValueWithRecordId.StripIdsDoFn()));
+    }
+
+    static class Factory<T>
+        implements PTransformOverrideFactory<
+            PBegin, PCollection<T>, BoundedReadFromUnboundedSource<T>> {
+      @Override
+      public PTransform<PBegin, PCollection<T>> getReplacementTransform(
+          BoundedReadFromUnboundedSource<T> transform) {
+        return new AdaptedBoundedAsUnbounded<>(transform);
+      }
+
+      @Override
+      public PBegin getInput(List<TaggedPValue> inputs, Pipeline p) {
+        return p.begin();
+      }
+
+      @Override
+      public Map<PValue, ReplacementOutput> mapOutputs(
+          List<TaggedPValue> outputs, PCollection<T> newOutput) {
+        return ReplacementOutputs.singleton(outputs, newOutput);
+      }
     }
   }
 }

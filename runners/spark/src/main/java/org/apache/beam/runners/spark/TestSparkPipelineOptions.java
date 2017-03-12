@@ -31,11 +31,6 @@ import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
  */
 public interface TestSparkPipelineOptions extends SparkPipelineOptions, TestPipelineOptions {
 
-  @Description("A special flag that forces streaming in tests.")
-  @Default.Boolean(false)
-  boolean isForceStreaming();
-  void setForceStreaming(boolean forceStreaming);
-
   @Description("A hard-coded expected number of assertions for this test pipeline.")
   @Nullable
   Integer getExpectedAssertions();

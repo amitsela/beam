@@ -20,7 +20,6 @@ package org.apache.beam.runners.spark;
 
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
-
 import org.apache.beam.runners.spark.translation.EvaluationContext;
 import org.apache.beam.runners.spark.translation.SparkPipelineTranslator;
 import org.apache.beam.runners.spark.translation.TransformTranslator;
@@ -84,9 +83,7 @@ public final class SparkRunnerDebugger extends PipelineRunner<SparkPipelineResul
     TransformTranslator.Translator translator = new TransformTranslator.Translator();
 
     SparkNativePipelineVisitor visitor;
-    if (options.isStreaming()
-        || options instanceof TestSparkPipelineOptions
-        && ((TestSparkPipelineOptions) options).isForceStreaming()) {
+    if (options.isStreaming()) {
       SparkPipelineTranslator streamingTranslator =
           new StreamingTransformTranslator.Translator(translator);
       EvaluationContext ctxt = new EvaluationContext(jsc, pipeline, jssc);

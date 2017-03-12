@@ -76,7 +76,7 @@ public class PipelineRule implements TestRule {
     protected void before() throws Throwable {
       super.before();
       temporaryFolder.create();
-      options.setForceStreaming(true);
+      options.setStreaming(true);
       options.setCheckpointDir(
           temporaryFolder.newFolder(options.getJobName()).toURI().toURL().toString());
     }
