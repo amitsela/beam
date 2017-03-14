@@ -17,8 +17,6 @@
  */
 package org.apache.beam.runners.spark.stateful;
 
-import static com.google.common.base.Preconditions.checkArgument;
-
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import java.util.Collection;
@@ -82,10 +80,10 @@ public class SparkTimerInternals implements TimerInternals {
           // firstime set.
           synchronizedProcessingTime = sparkWatermarks.getSynchronizedProcessingTime();
         } else {
-          // assert on following.
-          checkArgument(
-              sparkWatermarks.getSynchronizedProcessingTime().equals(synchronizedProcessingTime),
-              "Synchronized time is expected to keep synchronized across sources.");
+          // keep synchronized processing time on the lowest time.
+          synchronizedProcessingTime = synchronizedProcessingTime.isBefore(
+              sparkWatermarks.getSynchronizedProcessingTime()) ? synchronizedProcessingTime
+                  : sparkWatermarks.getSynchronizedProcessingTime();
         }
       }
     }
