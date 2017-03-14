@@ -26,7 +26,6 @@ import org.apache.beam.runners.spark.SparkRunner;
 import org.apache.beam.runners.spark.translation.EvaluationContext;
 import org.apache.beam.runners.spark.translation.SparkContextFactory;
 import org.apache.beam.runners.spark.translation.SparkPipelineTranslator;
-import org.apache.beam.runners.spark.translation.TransformTranslator;
 import org.apache.beam.runners.spark.translation.streaming.Checkpoint.CheckpointDir;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.hadoop.fs.FileSystem;
@@ -72,7 +71,7 @@ public class SparkRunnerStreamingContextFactory implements Function0<JavaStreami
         "Read time percentage is bound to (0, 1).");
 
     SparkPipelineTranslator translator =
-        new StreamingTransformTranslator.Translator(new TransformTranslator.Translator());
+        new StreamingTransformTranslator.Translator();
     Duration batchDuration = new Duration(options.getBatchIntervalMillis());
     LOG.info("Setting Spark streaming batchDuration to {} msec", batchDuration.milliseconds());
 

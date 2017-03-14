@@ -866,7 +866,7 @@ public final class TransformTranslator {
   }
 
   /**
-   * Translator matches Beam transformation with the appropriate evaluator.
+   * A batch Beam-Spark translator.
    */
   public static class Translator implements SparkPipelineTranslator {
 
@@ -876,20 +876,13 @@ public final class TransformTranslator {
     }
 
     @Override
-    public <TransformT extends PTransform<?, ?>> TransformEvaluator<TransformT>
-        translateBounded (Class<TransformT> clazz) {
+    public <TransformT extends PTransform<?, ?>> TransformEvaluator<TransformT> translate(
+        Class<TransformT> clazz) {
       @SuppressWarnings("unchecked") TransformEvaluator<TransformT> transformEvaluator =
           (TransformEvaluator<TransformT>) EVALUATORS.get(clazz);
       checkState(transformEvaluator != null,
           "No TransformEvaluator registered for BOUNDED transform %s", clazz);
       return transformEvaluator;
-    }
-
-    @Override
-    public <TransformT extends PTransform<?, ?>> TransformEvaluator<TransformT>
-        translateUnbounded(Class<TransformT> clazz) {
-      throw new IllegalStateException("TransformTranslator used in a batch pipeline only "
-          + "supports BOUNDED transforms.");
     }
   }
 }

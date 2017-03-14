@@ -29,7 +29,6 @@ import org.apache.beam.runners.spark.io.CreateStream;
 import org.apache.beam.runners.spark.translation.Dataset;
 import org.apache.beam.runners.spark.translation.EvaluationContext;
 import org.apache.beam.runners.spark.translation.SparkContextFactory;
-import org.apache.beam.runners.spark.translation.TransformTranslator;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.VarIntCoder;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
@@ -137,7 +136,7 @@ public class TrackStreamingSourcesTest {
         Integer... expected) {
       this.ctxt = new EvaluationContext(jssc.sparkContext(), pipeline, jssc);
       this.evaluator = new SparkRunner.Evaluator(
-          new StreamingTransformTranslator.Translator(new TransformTranslator.Translator()), ctxt);
+          new StreamingTransformTranslator.Translator(), ctxt);
       this.transformClassToAssert = transformClassToAssert;
       this.expected = expected;
     }

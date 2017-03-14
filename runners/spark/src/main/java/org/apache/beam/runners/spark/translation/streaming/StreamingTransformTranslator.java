@@ -534,34 +534,18 @@ public final class StreamingTransformTranslator {
   }
 
   /**
-   * Translator matches Beam transformation with the appropriate evaluator.
+   * A batch Beam-Spark translator.
    */
   public static class Translator implements SparkPipelineTranslator {
 
-    private final SparkPipelineTranslator batchTranslator;
-
-    public Translator(SparkPipelineTranslator batchTranslator) {
-      this.batchTranslator = batchTranslator;
-    }
-
     @Override
     public boolean hasTranslation(Class<? extends PTransform<?, ?>> clazz) {
-      // streaming includes rdd/bounded transformations as well
       return EVALUATORS.containsKey(clazz);
     }
 
     @Override
-    public <TransformT extends PTransform<?, ?>> TransformEvaluator<TransformT>
-        translateBounded(Class<TransformT> clazz) {
-      TransformEvaluator<TransformT> transformEvaluator = batchTranslator.translateBounded(clazz);
-      checkState(transformEvaluator != null,
-          "No TransformEvaluator registered for BOUNDED transform %s", clazz);
-      return transformEvaluator;
-    }
-
-    @Override
-    public <TransformT extends PTransform<?, ?>> TransformEvaluator<TransformT>
-        translateUnbounded(Class<TransformT> clazz) {
+    public <TransformT extends PTransform<?, ?>> TransformEvaluator<TransformT> translate(
+        Class<TransformT> clazz) {
       @SuppressWarnings("unchecked") TransformEvaluator<TransformT> transformEvaluator =
           (TransformEvaluator<TransformT>) EVALUATORS.get(clazz);
       checkState(transformEvaluator != null,

@@ -45,20 +45,18 @@ import org.apache.beam.runners.spark.translation.streaming.Checkpoint.Checkpoint
 import org.apache.beam.runners.spark.translation.streaming.SparkRunnerStreamingContextFactory;
 import org.apache.beam.runners.spark.util.GlobalWatermarkHolder.WatermarksListener;
 import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.io.BoundedReadFromUnboundedSource;
 import org.apache.beam.sdk.io.Read;
 import org.apache.beam.sdk.metrics.MetricsEnvironment;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.options.PipelineOptionsValidator;
+import org.apache.beam.sdk.runners.PTransformOverride;
 import org.apache.beam.sdk.runners.PTransformOverrideFactory;
 import org.apache.beam.sdk.runners.PipelineRunner;
 import org.apache.beam.sdk.runners.TransformHierarchy;
 import org.apache.beam.sdk.transforms.AppliedPTransform;
 import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.util.ValueWithRecordId;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionView;
@@ -162,7 +160,7 @@ public final class SparkRunner extends PipelineRunner<SparkPipelineResult> {
       // via UnboundedReadFromBoundedSource to ensure a streaming-only pipeline.
       // this is forced on the runner because Spark cannot properly
       // flatten/union batch and streaming branches in the same pipeline.
-      adaptBoundedReads(pipeline);
+      adaptBoundedReadsAsUnbounded(pipeline);
 
       CheckpointDir checkpointDir = new CheckpointDir(mOptions.getCheckpointDir());
       SparkRunnerStreamingContextFactory streamingContextFactory =
@@ -417,100 +415,41 @@ public final class SparkRunner extends PipelineRunner<SparkPipelineResult> {
       @SuppressWarnings("unchecked")
       TransformT transform = (TransformT) node.getTransform();
       @SuppressWarnings("unchecked")
-      Class<TransformT> transformClass = (Class<TransformT>) (Class<?>) transform.getClass();
+      Class<TransformT> transformClass = (Class<TransformT>) transform.getClass();
       @SuppressWarnings("unchecked")
-      TransformEvaluator<TransformT> evaluator = translate(node, transform, transformClass);
+      TransformEvaluator<TransformT> evaluator = translator.translate(transformClass);
       LOG.info("Evaluating {}", transform);
       AppliedPTransform<?, ?, ?> appliedTransform = node.toAppliedPTransform();
       ctxt.setCurrentTransform(appliedTransform);
       evaluator.evaluate(transform, ctxt);
       ctxt.setCurrentTransform(null);
     }
-
-    /**
-     * Determine if this Node belongs to a Bounded branch of the pipeline, or Unbounded, and
-     * translate with the proper translator.
-     */
-    protected <TransformT extends PTransform<? super PInput, POutput>>
-        TransformEvaluator<TransformT> translate(
-            TransformHierarchy.Node node, TransformT transform, Class<TransformT> transformClass) {
-      //--- determine if node is bounded/unbounded.
-      // usually, the input determines if the PCollection to apply the next transformation to
-      // is BOUNDED or UNBOUNDED, meaning RDD/DStream.
-      Collection<TaggedPValue> pValues;
-      if (node.getInputs().isEmpty()) {
-        // in case of a PBegin, it's the output.
-        pValues = node.getOutputs();
-      } else {
-        pValues = node.getInputs();
-      }
-      PCollection.IsBounded isNodeBounded = isBoundedCollection(pValues);
-      // translate accordingly.
-      LOG.debug("Translating {} as {}", transform, isNodeBounded);
-      return isNodeBounded.equals(PCollection.IsBounded.BOUNDED)
-          ? translator.translateBounded(transformClass)
-          : translator.translateUnbounded(transformClass);
-    }
-
-    protected PCollection.IsBounded isBoundedCollection(Collection<TaggedPValue> pValues) {
-      // anything that is not a PCollection, is BOUNDED.
-      // For PCollections:
-      // BOUNDED behaves as the Identity Element, BOUNDED + BOUNDED = BOUNDED
-      // while BOUNDED + UNBOUNDED = UNBOUNDED.
-      PCollection.IsBounded isBounded = PCollection.IsBounded.BOUNDED;
-      for (TaggedPValue pValue : pValues) {
-        if (pValue.getValue() instanceof PCollection) {
-          isBounded = isBounded.and(((PCollection) pValue.getValue()).isBounded());
-        } else {
-          isBounded = isBounded.and(PCollection.IsBounded.BOUNDED);
-        }
-      }
-      return isBounded;
-    }
   }
 
   @VisibleForTesting
-  static void adaptBoundedReads(Pipeline pipeline) {
+  static void adaptBoundedReadsAsUnbounded(Pipeline pipeline) {
     pipeline.replace(
-        PTransformMatchers.classEqualTo(BoundedReadFromUnboundedSource.class),
-        new AdaptedBoundedAsUnbounded.Factory());
+        PTransformOverride.of(
+            PTransformMatchers.classEqualTo(Read.Bounded.class),
+            new StreamingBoundedReadFactory<>()));
   }
 
-  private static class AdaptedBoundedAsUnbounded<T> extends PTransform<PBegin, PCollection<T>> {
-    private final BoundedReadFromUnboundedSource<T> source;
-
-    AdaptedBoundedAsUnbounded(BoundedReadFromUnboundedSource<T> source) {
-      this.source = source;
-    }
-
-    @SuppressWarnings("unchecked")
+  private static class StreamingBoundedReadFactory<T>
+      implements PTransformOverrideFactory<PBegin, PCollection<T>, Read.Bounded<T>> {
     @Override
-    public PCollection<T> expand(PBegin input) {
-      PTransform<PBegin, ? extends PCollection<ValueWithRecordId<T>>> replacingTransform =
-          new UnboundedReadFromBoundedSource<>(source.getAdaptedSource());
-      return (PCollection<T>) input.apply(replacingTransform)
-          .apply("StripIds", ParDo.of(new ValueWithRecordId.StripIdsDoFn()));
+    public PTransform<PBegin, PCollection<T>> getReplacementTransform(Read.Bounded<T> transform) {
+      return new UnboundedReadFromBoundedSource<>(transform.getSource());
     }
 
-    static class Factory<T>
-        implements PTransformOverrideFactory<
-            PBegin, PCollection<T>, BoundedReadFromUnboundedSource<T>> {
-      @Override
-      public PTransform<PBegin, PCollection<T>> getReplacementTransform(
-          BoundedReadFromUnboundedSource<T> transform) {
-        return new AdaptedBoundedAsUnbounded<>(transform);
-      }
+    @Override
+    public PBegin getInput(List<TaggedPValue> inputs, Pipeline p) {
+      return p.begin();
+    }
 
-      @Override
-      public PBegin getInput(List<TaggedPValue> inputs, Pipeline p) {
-        return p.begin();
-      }
-
-      @Override
-      public Map<PValue, ReplacementOutput> mapOutputs(
-          List<TaggedPValue> outputs, PCollection<T> newOutput) {
-        return ReplacementOutputs.singleton(outputs, newOutput);
-      }
+    @Override
+    public Map<PValue, ReplacementOutput> mapOutputs(
+        List<TaggedPValue> outputs, PCollection<T> newOutput) {
+      return ReplacementOutputs.singleton(outputs, newOutput);
     }
   }
 }
