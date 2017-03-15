@@ -35,7 +35,6 @@ import org.apache.beam.sdk.transforms.AppliedPTransform;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.PValue;
 import org.apache.beam.sdk.values.TaggedPValue;
 import org.apache.spark.api.java.JavaRDD;
@@ -56,7 +55,6 @@ public class EvaluationContext {
   private final Set<Dataset> leaves = new LinkedHashSet<>();
   private final Map<PValue, Object> pobjects = new LinkedHashMap<>();
   private AppliedPTransform<?, ?, ?> currentTransform;
-  private final SparkPCollectionView pviews = new SparkPCollectionView();
   private final Map<PCollection, Long> cacheCandidates = new HashMap<>();
 
   public EvaluationContext(JavaSparkContext jsc, Pipeline pipeline) {
@@ -203,29 +201,6 @@ public class EvaluationContext {
       return res;
     }
     throw new IllegalStateException("Cannot resolve un-known PObject: " + value);
-  }
-
-  /**
-   * Retrun the current views creates in the pipepline.
-   *
-   * @return SparkPCollectionView
-   */
-  public SparkPCollectionView getPViews() {
-    return pviews;
-  }
-
-  /**
-   * Adds/Replaces a view to the current views creates in the pipepline.
-   *
-   * @param view - Identifier of the view
-   * @param value - Actual value of the view
-   * @param coder - Coder of the value
-   */
-  public void putPView(
-      PCollectionView<?> view,
-      Iterable<WindowedValue<?>> value,
-      Coder<Iterable<WindowedValue<?>>> coder) {
-    pviews.putPView(view, value, coder);
   }
 
   /**

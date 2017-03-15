@@ -18,7 +18,6 @@
 
 package org.apache.beam.runners.spark.translation;
 
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.Maps;
 import java.io.Serializable;
@@ -42,7 +41,6 @@ import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.TupleTag;
-import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.PairFlatMapFunction;
@@ -247,39 +245,20 @@ public final class TranslationUtils {
   /**
    * Create SideInputs as Broadcast variables.
    *
-   * @param views The {@link PCollectionView}s.
-   * @param context The {@link EvaluationContext}.
-   * @return a map of tagged {@link SideInputBroadcast}s and their {@link WindowingStrategy}.
-   */
-  static Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, SideInputBroadcast<?>>> getSideInputs(
-      List<PCollectionView<?>> views, EvaluationContext context) {
-    return getSideInputs(views, context.getSparkContext(), context.getPViews());
-  }
-
-  /**
-   * Create SideInputs as Broadcast variables.
-   *
-   * @param views The {@link PCollectionView}s.
-   * @param context The {@link JavaSparkContext}.
-   * @param pviews The {@link SparkPCollectionView}.
+   * @param views   The {@link PCollectionView}s.
    * @return a map of tagged {@link SideInputBroadcast}s and their {@link WindowingStrategy}.
    */
   public static Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, SideInputBroadcast<?>>> getSideInputs(
-      List<PCollectionView<?>> views, JavaSparkContext context, SparkPCollectionView pviews) {
-    if (views == null) {
-      return ImmutableMap.of();
-    } else {
-      Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, SideInputBroadcast<?>>> sideInputs =
-          Maps.newHashMap();
-      for (PCollectionView<?> view : views) {
-        SideInputBroadcast helper = pviews.getPCollectionView(view, context);
-        WindowingStrategy<?, ?> windowingStrategy = view.getWindowingStrategyInternal();
-        sideInputs.put(
-            view.getTagInternal(),
-            KV.<WindowingStrategy<?, ?>, SideInputBroadcast<?>>of(windowingStrategy, helper));
-      }
-      return sideInputs;
+      List<PCollectionView<?>> views) {
+    Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, SideInputBroadcast<?>>> sideInputs =
+        Maps.newHashMap();
+    for (PCollectionView<?> view : views) {
+      SideInputBroadcast helper = SparkPCollectionView.get(view);
+      WindowingStrategy<?, ?> windowingStrategy = view.getWindowingStrategyInternal();
+      sideInputs.put(view.getTagInternal(),
+          KV.<WindowingStrategy<?, ?>, SideInputBroadcast<?>>of(windowingStrategy, helper));
     }
+    return sideInputs;
   }
 
   public static void rejectSplittable(DoFn<?, ?> doFn) {

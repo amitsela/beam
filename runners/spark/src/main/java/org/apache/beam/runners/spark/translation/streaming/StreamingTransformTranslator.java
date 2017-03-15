@@ -56,6 +56,7 @@ import org.apache.beam.runners.spark.translation.WindowingHelpers;
 import org.apache.beam.runners.spark.util.GlobalWatermarkHolder;
 import org.apache.beam.runners.spark.util.SideInputBroadcast;
 import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.coders.IterableCoder;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.io.Read;
 import org.apache.beam.sdk.transforms.Combine;
@@ -65,6 +66,7 @@ import org.apache.beam.sdk.transforms.Flatten;
 import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.View;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.PaneInfo;
@@ -76,6 +78,7 @@ import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.TaggedPValue;
 import org.apache.beam.sdk.values.TimestampedValue;
 import org.apache.beam.sdk.values.TupleTag;
@@ -84,6 +87,7 @@ import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.VoidFunction;
 import org.apache.spark.streaming.api.java.JavaDStream;
 import org.apache.spark.streaming.api.java.JavaInputDStream;
 import org.apache.spark.streaming.api.java.JavaPairDStream;
@@ -181,6 +185,43 @@ public final class StreamingTransformTranslator {
       @Override
       public String toNativeString() {
         return "streamingContext.queueStream(...)";
+      }
+    };
+  }
+
+  private static <ElemT, ViewT> TransformEvaluator<View.CreatePCollectionView<ElemT, ViewT>>
+  createPCollView() {
+    return new TransformEvaluator<View.CreatePCollectionView<ElemT, ViewT>>() {
+      @Override
+      public void evaluate(
+          View.CreatePCollectionView<ElemT, ViewT> transform,
+          EvaluationContext context) {
+        @SuppressWarnings("unchecked")
+        UnboundedDataset<ElemT> unboundedDataset =
+            ((UnboundedDataset<ElemT>) context.borrowDataset(transform));
+        Coder<? extends BoundedWindow> windowCoder =
+            context.getInput(transform).getWindowingStrategy().getWindowFn().windowCoder();
+        final PCollectionView<ViewT> view = context.getOutput(transform);
+        final IterableCoder<WindowedValue<ElemT>> iterableCoder =
+            IterableCoder.of(
+                WindowedValue.FullWindowedValueCoder.of(
+                    context.getInput(transform).getCoder(),
+                    windowCoder));
+
+        // check for updated Views and add them.
+        unboundedDataset.getDStream().foreachRDD(new VoidFunction<JavaRDD<WindowedValue<ElemT>>>() {
+          @Override
+          public void call(JavaRDD<WindowedValue<ElemT>> rdd) throws Exception {
+            Iterable<WindowedValue<ElemT>> values = rdd.collect();
+            JavaSparkContext jsc = new JavaSparkContext(rdd.rdd().sparkContext());
+            SparkPCollectionView.putView(view, values, iterableCoder, jsc);
+          }
+        });
+      }
+
+      @Override
+      public String toNativeString() {
+        return "<createPCollectionView>";
       }
     };
   }
@@ -324,30 +365,29 @@ public final class StreamingTransformTranslator {
         final CombineWithContext.KeyedCombineFnWithContext<K, InputT, ?, OutputT> fn =
             (CombineWithContext.KeyedCombineFnWithContext<K, InputT, ?, OutputT>)
                 CombineFnUtil.toFnWithContext(transform.getFn());
+        final SparkRuntimeContext runtimeContext = context.getRuntimeContext();
 
         @SuppressWarnings("unchecked")
         UnboundedDataset<KV<K, Iterable<InputT>>> unboundedDataset =
             ((UnboundedDataset<KV<K, Iterable<InputT>>>) context.borrowDataset(transform));
         JavaDStream<WindowedValue<KV<K, Iterable<InputT>>>> dStream = unboundedDataset.getDStream();
 
-        final SparkRuntimeContext runtimeContext = context.getRuntimeContext();
-        final SparkPCollectionView pviews = context.getPViews();
 
         JavaDStream<WindowedValue<KV<K, OutputT>>> outStream = dStream.transform(
             new Function<JavaRDD<WindowedValue<KV<K, Iterable<InputT>>>>,
-                         JavaRDD<WindowedValue<KV<K, OutputT>>>>() {
-                @Override
-                public JavaRDD<WindowedValue<KV<K, OutputT>>>
-                    call(JavaRDD<WindowedValue<KV<K, Iterable<InputT>>>> rdd)
-                        throws Exception {
-                        SparkKeyedCombineFn<K, InputT, ?, OutputT> combineFnWithContext =
-                            new SparkKeyedCombineFn<>(fn, runtimeContext,
-                                TranslationUtils.getSideInputs(transform.getSideInputs(),
-                                new JavaSparkContext(rdd.context()), pviews),
-                                windowingStrategy);
+                JavaRDD<WindowedValue<KV<K, OutputT>>>>() {
+                  @Override
+                  public JavaRDD<WindowedValue<KV<K, OutputT>>> call(
+                      JavaRDD<WindowedValue<KV<K, Iterable<InputT>>>> rdd) throws Exception {
+                    SparkKeyedCombineFn<K, InputT, ?, OutputT> combineFnWithContext =
+                        new SparkKeyedCombineFn<>(
+                            fn,
+                            runtimeContext,
+                            TranslationUtils.getSideInputs(transform.getSideInputs()),
+                            windowingStrategy);
                     return rdd.map(
                         new TranslationUtils.CombineGroupedValues<>(combineFnWithContext));
-                  }
+                    }
                 });
 
         context.putDataset(transform,
@@ -370,7 +410,6 @@ public final class StreamingTransformTranslator {
         rejectSplittable(doFn);
         rejectStateAndTimers(doFn);
         final SparkRuntimeContext runtimeContext = context.getRuntimeContext();
-        final SparkPCollectionView pviews = context.getPViews();
         final WindowingStrategy<?, ?> windowingStrategy =
             context.getInput(transform).getWindowingStrategy();
 
@@ -397,8 +436,7 @@ public final class StreamingTransformTranslator {
                           MetricsAccumulator.getInstance();
                       final Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, SideInputBroadcast<?>>>
                           sideInputs =
-                              TranslationUtils.getSideInputs(
-                                  transform.getSideInputs(), jsc, pviews);
+                              TranslationUtils.getSideInputs(transform.getSideInputs());
                       return rdd.mapPartitions(
                           new DoFnFunction<>(
                               aggAccum,
@@ -433,10 +471,7 @@ public final class StreamingTransformTranslator {
                               MetricsAccumulator.getInstance();
                           final Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, SideInputBroadcast<?>>>
                               sideInputs =
-                                  TranslationUtils.getSideInputs(
-                                      transform.getSideInputs(),
-                                      JavaSparkContext.fromSparkContext(rdd.context()),
-                                      pviews);
+                                  TranslationUtils.getSideInputs(transform.getSideInputs());
                           return rdd.mapPartitionsToPair(
                               new MultiDoFnFunction<>(
                                   aggAccum,
@@ -521,6 +556,7 @@ public final class StreamingTransformTranslator {
     EVALUATORS.put(ParDo.MultiOutput.class, multiDo());
     EVALUATORS.put(ConsoleIO.Write.Unbound.class, print());
     EVALUATORS.put(CreateStream.class, createFromQueue());
+    EVALUATORS.put(View.CreatePCollectionView.class, createPCollView());
     EVALUATORS.put(Window.Assign.class, window());
     EVALUATORS.put(Flatten.PCollections.class, flattenPColl());
     EVALUATORS.put(Reshuffle.class, reshuffle());
