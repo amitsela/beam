@@ -41,8 +41,6 @@ import org.apache.beam.runners.spark.io.SparkUnboundedSource;
 import org.apache.beam.runners.spark.metrics.MetricsAccumulator;
 import org.apache.beam.runners.spark.metrics.SparkMetricsContainer;
 import org.apache.beam.runners.spark.stateful.SparkGroupAlsoByWindowViaWindowSet;
-import org.apache.beam.runners.spark.translation.BoundedDataset;
-import org.apache.beam.runners.spark.translation.Dataset;
 import org.apache.beam.runners.spark.translation.DoFnFunction;
 import org.apache.beam.runners.spark.translation.EvaluationContext;
 import org.apache.beam.runners.spark.translation.GroupCombineFunctions;
@@ -196,8 +194,8 @@ public final class StreamingTransformTranslator {
         // since this is a streaming pipeline, at least one of the PCollections to "flatten" are
         // unbounded, meaning it represents a DStream.
         // So we could end up with an unbounded unified DStream.
-        final List<JavaDStream<WindowedValue<T>>> dStreams = new ArrayList<>();
-        final List<Integer> streamingSources = new ArrayList<>();
+        final List<JavaDStream<WindowedValue<T>>> streams = new ArrayList<>();
+        final List<Integer> streamingSourceIds = new ArrayList<>();
         for (TaggedPValue pv : pcs) {
           checkArgument(
               pv.getValue() instanceof PCollection,
@@ -205,24 +203,19 @@ public final class StreamingTransformTranslator {
               pv.getValue(),
               pv.getValue().getClass().getSimpleName());
           PCollection<T> pcol = (PCollection<T>) pv.getValue();
-          Dataset dataset = context.borrowDataset(pcol);
-          if (dataset instanceof UnboundedDataset) {
-            UnboundedDataset<T> unboundedDataset = (UnboundedDataset<T>) dataset;
-            streamingSources.addAll(unboundedDataset.getStreamSources());
-            dStreams.add(unboundedDataset.getDStream());
-          } else {
-            // create a single RDD stream.
-            Queue<JavaRDD<WindowedValue<T>>> q = new LinkedBlockingQueue<>();
-            q.offer(((BoundedDataset) dataset).getRDD());
-            //TODO: this is not recoverable from checkpoint!
-            JavaDStream<WindowedValue<T>> dStream = context.getStreamingContext().queueStream(q);
-            dStreams.add(dStream);
-          }
+          UnboundedDataset<T> unboundedDataset = (UnboundedDataset<T>) context.borrowDataset(pcol);
+          streams.add(unboundedDataset.getDStream());
+          streamingSourceIds.addAll(unboundedDataset.getStreamSources());
         }
-        // start by unifying streams into a single stream.
-        JavaDStream<WindowedValue<T>> unifiedStreams =
-            context.getStreamingContext().union(dStreams.remove(0), dStreams);
-        context.putDataset(transform, new UnboundedDataset<>(unifiedStreams, streamingSources));
+        checkArgument(streams.size() > 0, "Must flatten at least one stream.");
+        JavaDStream<WindowedValue<T>> flattenedStream;
+        if (streams.size() > 1) {
+          flattenedStream = context.getStreamingContext().union(streams.remove(0), streams);
+        } else {
+          flattenedStream = streams.get(0);
+        }
+
+        context.putDataset(transform, new UnboundedDataset<>(flattenedStream, streamingSourceIds));
       }
 
       @Override

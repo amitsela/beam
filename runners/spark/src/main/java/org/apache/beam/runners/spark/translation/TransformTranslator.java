@@ -106,21 +106,18 @@ public final class TransformTranslator {
       @Override
       public void evaluate(Flatten.PCollections<T> transform, EvaluationContext context) {
         List<TaggedPValue> pcs = context.getInputs(transform);
-        JavaRDD<WindowedValue<T>> unionRDD;
-        if (pcs.size() == 0) {
-          unionRDD = context.getSparkContext().emptyRDD();
-        } else {
-          JavaRDD<WindowedValue<T>>[] rdds = new JavaRDD[pcs.size()];
-          for (int i = 0; i < rdds.length; i++) {
-            checkArgument(
-                pcs.get(i).getValue() instanceof PCollection,
-                "Flatten had non-PCollection value in input: %s of type %s",
-                pcs.get(i).getValue(),
-                pcs.get(i).getValue().getClass().getSimpleName());
-            rdds[i] = ((BoundedDataset<T>) context.borrowDataset(pcs.get(i).getValue())).getRDD();
-          }
-          unionRDD = context.getSparkContext().union(rdds);
+        JavaRDD<WindowedValue<T>>[] rdds = new JavaRDD[pcs.size()];
+        for (int i = 0; i < rdds.length; i++) {
+          checkArgument(
+              pcs.get(i).getValue() instanceof PCollection,
+              "Flatten had non-PCollection value in input: %s of type %s",
+              pcs.get(i).getValue(),
+              pcs.get(i).getValue().getClass().getSimpleName());
+          rdds[i] = ((BoundedDataset<T>) context.borrowDataset(pcs.get(i).getValue())).getRDD();
         }
+        checkArgument(rdds.length > 0, "Must flatten at least one RDD.");
+        JavaRDD<WindowedValue<T>> unionRDD;
+        unionRDD = context.getSparkContext().union(rdds);
         context.putDataset(transform, new BoundedDataset<>(unionRDD));
       }
 
