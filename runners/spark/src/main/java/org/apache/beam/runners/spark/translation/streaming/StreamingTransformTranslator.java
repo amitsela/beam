@@ -218,6 +218,10 @@ public final class StreamingTransformTranslator {
           @Override
           public void call(JavaRDD<WindowedValue<ElemT>> rdd) throws Exception {
             Iterable<WindowedValue<ElemT>> values = rdd.collect();
+            if (Iterables.isEmpty(values)) {
+              // avoid overriding the view with an empty one just because the micro-batch triggered.
+              return;
+            }
             JavaSparkContext jsc = new JavaSparkContext(rdd.rdd().sparkContext());
             SparkPCollectionView.putView(view, values, iterableCoder, jsc);
           }
