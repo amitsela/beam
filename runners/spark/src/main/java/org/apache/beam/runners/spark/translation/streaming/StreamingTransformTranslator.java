@@ -86,12 +86,17 @@ import org.apache.spark.Accumulator;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.JavaSparkContext$;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.VoidFunction;
+import org.apache.spark.rdd.RDD;
+import org.apache.spark.streaming.StreamingContext;
 import org.apache.spark.streaming.api.java.JavaDStream;
 import org.apache.spark.streaming.api.java.JavaInputDStream;
 import org.apache.spark.streaming.api.java.JavaPairDStream;
 import org.apache.spark.streaming.api.java.JavaStreamingContext;
+import org.apache.spark.streaming.dstream.ConstantInputDStream;
+import scala.reflect.ClassTag;
 
 
 /**
@@ -248,12 +253,18 @@ public final class StreamingTransformTranslator {
           streams.add(unboundedDataset.getDStream());
           streamingSourceIds.addAll(unboundedDataset.getStreamSources());
         }
-        checkArgument(streams.size() > 0, "Must flatten at least one stream.");
         JavaDStream<WindowedValue<T>> flattenedStream;
-        if (streams.size() > 1) {
+        if (streams.size() > 0) {
           flattenedStream = context.getStreamingContext().union(streams.remove(0), streams);
         } else {
-          flattenedStream = streams.get(0);
+          // if this is a flattening of no PCollections we create an empty stream by
+          // using a ConstantInputDStream with and empty RDD.
+          StreamingContext ssc = context.getStreamingContext().ssc();
+          ClassTag<WindowedValue<T>> tClassTag = JavaSparkContext$.MODULE$.fakeClassTag();
+          RDD<WindowedValue<T>> emptyRDD = ssc.sc().emptyRDD(tClassTag);
+          flattenedStream =
+              new JavaInputDStream<>(
+                  new ConstantInputDStream<>(ssc, emptyRDD, tClassTag), tClassTag);
         }
 
         context.putDataset(transform, new UnboundedDataset<>(flattenedStream, streamingSourceIds));

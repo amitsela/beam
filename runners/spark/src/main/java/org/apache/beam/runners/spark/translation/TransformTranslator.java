@@ -95,9 +95,12 @@ public final class TransformTranslator {
               pcs.get(i).getValue().getClass().getSimpleName());
           rdds[i] = ((BoundedDataset<T>) context.borrowDataset(pcs.get(i).getValue())).getRDD();
         }
-        checkArgument(rdds.length > 0, "Must flatten at least one RDD.");
         JavaRDD<WindowedValue<T>> unionRDD;
-        unionRDD = context.getSparkContext().union(rdds);
+        if (rdds.length > 0) {
+          unionRDD = context.getSparkContext().union(rdds);
+        } else {
+          unionRDD = context.getSparkContext().emptyRDD();
+        }
         context.putDataset(transform, new BoundedDataset<>(unionRDD));
       }
 
