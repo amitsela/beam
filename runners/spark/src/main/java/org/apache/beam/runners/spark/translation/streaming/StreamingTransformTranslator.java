@@ -444,7 +444,6 @@ public final class StreamingTransformTranslator {
                     @Override
                     public JavaRDD<WindowedValue<OutputT>> call(JavaRDD<WindowedValue<InputT>> rdd)
                         throws Exception {
-                      final JavaSparkContext jsc = new JavaSparkContext(rdd.context());
                       final Accumulator<NamedAggregators> aggAccum =
                           AggregatorsAccumulator.getInstance();
                       final Accumulator<SparkMetricsContainer> metricsAccum =

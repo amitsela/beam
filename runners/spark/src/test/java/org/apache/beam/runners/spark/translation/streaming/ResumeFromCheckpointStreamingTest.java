@@ -56,9 +56,9 @@ import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.transforms.Aggregator;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.Flatten;
 import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.Keys;
-import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.Sum;
@@ -72,7 +72,6 @@ import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionView;
-import org.apache.beam.sdk.values.PDone;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.Serializer;
@@ -256,7 +255,7 @@ public class ResumeFromCheckpointStreamingTest {
 
     PCollection<KV<String, Instant>> kafkaStream = p.apply(read.withoutMetadata());
 
-    PCollection<Iterable<String>> grouped = kafkaStream
+    PCollection<String> output = kafkaStream
         .apply(Keys.<String>create())
         .apply("EOFShallNotPassFn", ParDo.of(new EOFShallNotPassFn(view)).withSideInputs(view))
         .apply(Window.<String>into(FixedWindows.of(Duration.millis(500)))
@@ -265,9 +264,10 @@ public class ResumeFromCheckpointStreamingTest {
                 .withAllowedLateness(Duration.ZERO))
         .apply(WithKeys.<Integer, String>of(1))
         .apply(GroupByKey.<Integer, String>create())
-        .apply(Values.<Iterable<String>>create());
+        .apply(Values.<Iterable<String>>create())
+        .apply(Flatten.<String>iterables());
 
-    grouped.apply(new PAssertWithoutFlatten<>("k1", "k2", "k3", "k4", "k5"));
+    PAssert.that(output).containsInAnyOrder("k1", "k2", "k3", "k4", "k5");
 
     return (SparkPipelineResult) p.run();
   }
@@ -302,47 +302,4 @@ public class ResumeFromCheckpointStreamingTest {
       }
     }
   }
-
-  /**
-   * A custom PAssert that avoids using {@link org.apache.beam.sdk.transforms.Flatten}
-   * until BEAM-1444 is resolved.
-   */
-  private static class PAssertWithoutFlatten<T>
-      extends PTransform<PCollection<Iterable<T>>, PDone> {
-    private final T[] expected;
-
-    private PAssertWithoutFlatten(T... expected) {
-      this.expected = expected;
-    }
-
-    @Override
-    public PDone expand(PCollection<Iterable<T>> input) {
-      input.apply(ParDo.of(new AssertDoFn<>(expected)));
-      return PDone.in(input.getPipeline());
-    }
-
-    private static class AssertDoFn<T> extends DoFn<Iterable<T>, Void> {
-      private final Aggregator<Integer, Integer> success =
-          createAggregator(PAssert.SUCCESS_COUNTER, Sum.ofIntegers());
-      private final Aggregator<Integer, Integer> failure =
-          createAggregator(PAssert.FAILURE_COUNTER, Sum.ofIntegers());
-      private final T[] expected;
-
-      AssertDoFn(T[] expected) {
-        this.expected = expected;
-      }
-
-      @ProcessElement
-      public void processElement(ProcessContext c) throws Exception {
-        try {
-          assertThat(c.element(), containsInAnyOrder(expected));
-          success.addValue(1);
-        } catch (Throwable t) {
-          failure.addValue(1);
-          throw t;
-        }
-      }
-    }
-  }
-
 }
